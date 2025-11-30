@@ -1,0 +1,57 @@
+[
+  {
+    "languageId": "glscript",
+    "command": "cargo",
+    "args": [
+      "run",
+      "--",
+      "./node_modules/.bin/tsgo.cmd"
+    ],
+    "fileExtensions": [
+      ".ts",
+      ".tsx",
+      ".js",
+      ".jsx",
+      ".mts",
+      ".mjs",
+      ".cts",
+      ".cjs"
+    ],
+    "initializationOptions": {
+      "preferences": {
+        "quotePreference": "auto",
+        "importModuleSpecifierEnding": "auto",
+        "jsxAttributeCompletionStyle": "auto",
+        "allowTextChangesInNewFiles": true,
+        "providePrefixAndSuffixTextForRename": true,
+        "allowRenameOfImportPath": true,
+        "includeAutomaticOptionalChainCompletions": true,
+        "provideRefactorNotApplicableReason": true,
+        "generateReturnInDocTemplate": true,
+        "includeCompletionsForImportStatements": true,
+        "includeCompletionsWithSnippetText": true,
+        "includeCompletionsWithClassMemberSnippets": true,
+        "includeCompletionsWithObjectLiteralMethodSnippets": true,
+        "autoImportFileExcludePatterns": [],
+        "autoImportSpecifierExcludeRegexes": [],
+        "preferTypeOnlyAutoImports": false,
+        "useLabelDetailsInCompletionEntries": true,
+        "allowIncompleteCompletions": true,
+        "displayPartsForJSDoc": true,
+        "disableLineTextInReferences": true,
+        "interactiveInlayHints": true,
+        "includeInlayVariableTypeHintsWhenTypeMatchesName": false,
+        "organizeImportsIgnoreCase": "auto",
+        "maximumHoverLength": 500,
+        "includeCompletionsForModuleExports": true,
+        "includeInlayParameterNameHints": "all",
+        "includeInlayParameterNameHintsWhenArgumentMatchesName": false,
+        "includeInlayFunctionParameterTypeHints": true,
+        "includeInlayVariableTypeHints": true,
+        "includeInlayPropertyDeclarationTypeHints": true,
+        "includeInlayFunctionLikeReturnTypeHints": true,
+        "includeInlayEnumMemberValueHints": true
+      }
+    }
+  }
+]

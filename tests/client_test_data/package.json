@@ -1,0 +1,10 @@
+{
+  "name": "glproject",
+  "version": "0.0.1",
+  "description": "Sample glscript project",
+  "devDependencies": {
+    "@typescript/native-preview": "^7.0.0-dev.20250819.1",
+    "typescript-language-server": "^4.4.0",
+    "typescript": "^5.9.2"
+  }
+}

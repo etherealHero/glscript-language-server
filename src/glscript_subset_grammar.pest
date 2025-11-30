@@ -1,0 +1,62 @@
+// GlScript subset tokenizer grammar
+SourceFile = { SOI ~ _expression* ~ EOI }
+
+_expression = _{ _tracked | Untracked }
+
+_tracked  = _{ _includeStatement | _region | _regex | _stringLiteral | _comment | LineTerminator }
+Untracked =  { (!(_tracked | PlaceholderCloseBracket) ~ ANY)+ | (!(_tracked) ~ ANY) }
+// .                         ^fix nested stmt
+
+LineTerminator    =  { "\n" | "\r\n" | "\r" }
+WhiteSpace        =  { " " | "\t" }
+_maybeEscapedChar = _{ ("\\" ~ ANY) | (!"\\" ~ ANY) }
+
+// Include statement
+_includeStatement = _{ IncludeToken ~ (WhiteSpace | LineTerminator | _comment)+ ~ IncludePath }
+IncludeToken      =  { "import" | "#include" }
+IncludePath       = @{ DoubleStringLiteral | SingleStringLiteral | ("<" ~ (!(">" | LineTerminator) ~ ANY)* ~ ">") }
+
+// Regions
+RegionStartToken         =  { "#" ~ ("text" | "sql") }
+RegionStartUntrackedMark =  { (!LineTerminator ~ ANY)* }
+RegionChars              =  { (!(_regionClose | LineTerminator) ~ ANY)+ }
+RegionCloseToken         =  { "#end" ~ ("text" | "sql") }
+RegionCloseUntrackedMark =  { (!(LineTerminator | RegionCloseToken) ~ ANY)* }
+_regionStart             = _{ RegionStartToken ~ RegionStartUntrackedMark }
+_regionClose             = _{ RegionCloseUntrackedMark ~ RegionCloseToken ~ RegionCloseUntrackedMark }
+_region                  = _{
+    _regionStart ~ (LineTerminator | RegionChars)+ ~ _regionClose
+}
+
+// String literals
+_stringLiteral = _{ DoubleStringLiteral | SingleStringLiteral | _templateString }
+
+DoubleStringLiteral = { "\"" ~ (!("\"" | LineTerminator) ~ _maybeEscapedChar)* ~ "\"" }
+SingleStringLiteral = { "'" ~ (!("'" | LineTerminator) ~ _maybeEscapedChar)* ~ "'" }
+
+TemplateStringBracket   =  { "`" }
+TemplateStringChars     =  { (!(TemplateStringBracket | PlaceholderOpenBracket | LineTerminator) ~ _maybeEscapedChar)+ }
+PlaceholderOpenBracket  =  { "${" }
+PlaceholderCloseBracket =  { "}" }
+_templateString         = _{ TemplateStringBracket ~ _templatePart* ~ TemplateStringBracket }
+_templatePart           = _{ _templateExpression | LineTerminator | TemplateStringChars }
+_templateExpression     = _{
+    PlaceholderOpenBracket ~ (!PlaceholderCloseBracket ~ _expression)+ ~ PlaceholderCloseBracket
+}
+
+// RegExp
+_regex       = _{ RegexBracket ~ RegexChars ~ RegexBracket }
+RegexChars   =  { (!(RegexBracket | LineTerminator) ~ _maybeEscapedChar)+ }
+RegexBracket =  { !("\\/" | MultiLineCommentOpenBracket) ~ "/" }
+
+// Comments
+_comment = _{ SingleLineComment | _muliLineComment }
+
+SingleLineComment = { "//" ~ (!LineTerminator ~ ANY)* }
+
+MultiLineCommentOpenBracket  =  { "/*" }
+MultiLineCommentChars        =  { (!(MultiLineCommentCloseBracket | LineTerminator) ~ _maybeEscapedChar)+ }
+MultiLineCommentCloseBracket =  { "*/" }
+_muliLineComment             = _{
+    MultiLineCommentOpenBracket ~ (LineTerminator | MultiLineCommentChars)+ ~ MultiLineCommentCloseBracket
+}
