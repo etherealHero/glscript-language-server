@@ -5,9 +5,9 @@ use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::lsp_types::{notification::Notification, request::Request};
 use async_lsp::{ErrorCode, LanguageServer, ResponseError};
 
-use crate::builder::Build;
+use crate::builder::{BUILD_FILE, Build};
 use crate::proxy::{JS_LANG_ID, Proxy, ResFut, ResReq};
-use crate::state::ToSourcePath;
+use crate::state::{ToSource, ToSourcePath};
 
 impl LanguageServer for Proxy {
     type Error = ResponseError;
@@ -42,9 +42,8 @@ impl LanguageServer for Proxy {
 
     fn did_open(&mut self, params: lsp::DidOpenTextDocumentParams) -> Self::NotifyResult {
         let mut doc = params.text_document;
-        if doc.language_id == JS_LANG_ID {
+        if doc.language_id == JS_LANG_ID && !doc.uri.source_path().ends_with(BUILD_FILE) {
             self.state.set_doc(&doc.uri, &doc.text);
-            self.state.set_lang_id(&doc.uri, &doc.language_id);
             let build_with_version = self.state.set_build(&doc.uri);
             doc.text = build_with_version.build.text;
             doc.version = build_with_version.version;
@@ -54,18 +53,13 @@ impl LanguageServer for Proxy {
         ControlFlow::Continue(())
     }
 
-    // FIXME: sync failed after change dependency
-    // TODO: add ts plugin for emit sourceFile content back by notify proxy server for validate self state with ts state
     fn did_change(&mut self, params: lsp::DidChangeTextDocumentParams) -> Self::NotifyResult {
         let uri = &params.text_document.uri;
 
-        match self.state.get_lang_id(uri) {
-            Some(lang_id) if lang_id != JS_LANG_ID => {
-                let _ = self.server().did_change(params);
-                return ControlFlow::Continue(());
-            }
-            _ => {}
-        };
+        if self.state.get_build(uri).is_none() {
+            let _ = self.server().did_change(params);
+            return ControlFlow::Continue(());
+        }
 
         // 1. apply changes to raw document
         if let Some(mut text) = self.state.get_doc(uri) {
@@ -155,24 +149,19 @@ impl LanguageServer for Proxy {
             let _ = self.server().did_change(forward_params);
         }
 
-        assert!(current_build_traversed);
+        assert!(
+            current_build_traversed,
+            "{} should be traversed",
+            uri.source_path().source(self.state.get_project())
+        );
 
         ControlFlow::Continue(())
     }
 
     fn did_save(&mut self, mut params: lsp::DidSaveTextDocumentParams) -> Self::NotifyResult {
-        if params.text.is_some() {
-            let uri = &params.text_document.uri;
-            match self.state.get_lang_id(uri) {
-                Some(lang_id) if lang_id != JS_LANG_ID => {
-                    let _ = self.server().did_save(params);
-                    return ControlFlow::Continue(());
-                }
-                _ => {}
-            };
-            if let Some(build) = self.state.get_build(uri) {
-                params.text = Some(build.text);
-            }
+        let uri = &params.text_document.uri;
+        if let (_, Some(build)) = (params.text.is_some(), self.state.get_build(uri)) {
+            params.text = Some(build.text);
         }
         let _ = self.server().did_save(params);
         ControlFlow::Continue(())
@@ -230,6 +219,9 @@ impl LanguageServer for Proxy {
             Some(b) => build = b,
         };
 
+        let build_sources = build.sources();
+        let project = self.state.get_project().clone();
+
         Box::pin(async move {
             let doc_pos = &mut params.text_document_position_params;
             let uri = &doc_pos.text_document.uri.clone();
@@ -265,8 +257,8 @@ impl LanguageServer for Proxy {
                 Ok(source_range.1)
             }
 
-            let res = res.unwrap().unwrap();
-            let forward_res: lsp::GotoDefinitionResponse = match res {
+            let ts_definition_response = res.unwrap().unwrap();
+            let forward_res: lsp::GotoDefinitionResponse = match ts_definition_response {
                 lsp::GotoDefinitionResponse::Scalar(mut location) if &location.uri == uri => {
                     match forward_range(&mut location.range, &build) {
                         Ok(uri) => location.uri = uri,
@@ -274,39 +266,72 @@ impl LanguageServer for Proxy {
                     };
                     lsp::GotoDefinitionResponse::Scalar(location)
                 }
-                lsp::GotoDefinitionResponse::Array(mut locations) => {
-                    for location in &mut locations {
-                        if &location.uri == uri {
-                            match forward_range(&mut location.range, &build) {
-                                Ok(uri) => location.uri = uri,
+                lsp::GotoDefinitionResponse::Array(locations) => {
+                    let mut forward_locations = vec![];
+                    for loc in locations {
+                        let mut forward_loc;
+
+                        // emitted reference
+                        if &loc.uri == uri {
+                            forward_loc = loc.clone();
+                            match forward_range(&mut forward_loc.range, &build) {
+                                Ok(uri) => forward_loc.uri = uri,
                                 Err(err) => return Err(err),
                             };
+                            forward_locations.push(forward_loc);
+                            continue;
                         }
+
+                        let loc_source = &loc.uri.source_path().source(&project);
+                        let is_build_file = loc.uri.source_path().ends_with(BUILD_FILE);
+                        if build_sources.contains(loc_source) || is_build_file {
+                            continue; // skip duplicated source references
+                        }
+
+                        forward_locations.push(loc.to_owned()); // .d.ts reference
                     }
-                    lsp::GotoDefinitionResponse::Array(locations)
+                    lsp::GotoDefinitionResponse::Array(forward_locations)
                 }
-                lsp::GotoDefinitionResponse::Link(mut location_links) => {
-                    for location in &mut location_links {
-                        if &location.target_uri == uri {
-                            match forward_range(&mut location.target_range, &build) {
-                                Ok(uri) => location.target_uri = uri,
+                lsp::GotoDefinitionResponse::Link(location_links) => {
+                    let mut forward_locations = vec![];
+                    for loc in location_links {
+                        let mut forward_loc;
+
+                        // emitted reference
+                        if &loc.target_uri == uri {
+                            forward_loc = loc.clone();
+
+                            match forward_range(&mut forward_loc.target_range, &build) {
+                                Ok(uri) => forward_loc.target_uri = uri,
                                 Err(err) => return Err(err),
                             };
-                            match forward_range(&mut location.target_selection_range, &build) {
+                            match forward_range(&mut forward_loc.target_selection_range, &build) {
                                 Ok(_) => {}
                                 Err(err) => return Err(err),
                             };
-                            if let Some(mut range) = location.origin_selection_range {
+                            if let Some(mut range) = forward_loc.origin_selection_range {
                                 match forward_range(&mut range, &build) {
                                     Ok(_) => {}
-                                    Err(err) => return Err(err),
+                                    Err(_) => forward_loc.origin_selection_range = None,
+                                    //  ^ fired on include path definition req
                                 };
                             }
+
+                            forward_locations.push(forward_loc);
+                            continue;
                         }
+
+                        let loc_source = &loc.target_uri.source_path().source(&project);
+                        let is_build_file = loc.target_uri.source_path().ends_with(BUILD_FILE);
+                        if build_sources.contains(loc_source) || is_build_file {
+                            continue; // skip duplicated source references
+                        }
+
+                        forward_locations.push(loc.to_owned()); // .d.ts reference
                     }
-                    lsp::GotoDefinitionResponse::Link(location_links)
+                    lsp::GotoDefinitionResponse::Link(forward_locations)
                 }
-                _ => res,
+                _ => ts_definition_response, // .d.ts reference
             };
 
             Ok(Some(forward_res))

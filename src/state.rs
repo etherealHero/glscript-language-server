@@ -15,7 +15,6 @@ pub struct BuildWithVersion {
 pub struct State {
     project_path: Arc<OnceLock<SourcePath>>,
     documents: Arc<DashMap<SourcePath, String>>,
-    lang_id: Arc<DashMap<SourcePath, String>>,
     builds: Arc<DashMap<SourcePath, BuildWithVersion>>,
 }
 
@@ -23,11 +22,22 @@ pub type SourcePath = PathBuf;
 
 pub trait ToSourcePath {
     fn source_path(&self) -> SourcePath;
+    fn try_source_path(&self) -> anyhow::Result<SourcePath>;
 }
 
 impl ToSourcePath for Uri {
     fn source_path(&self) -> SourcePath {
-        self.to_file_path().unwrap().canonicalize().unwrap()
+        let err = format!("Expected valid input Uri from Language Services, but found: {self}");
+        self.to_file_path().expect(&err).canonicalize().expect(&err)
+    }
+
+    fn try_source_path(&self) -> anyhow::Result<SourcePath> {
+        let source_path = self
+            .to_file_path()
+            .map_err(|_| anyhow::anyhow!("invalid file uri: {self}"))?
+            .canonicalize()?;
+
+        Ok(source_path)
     }
 }
 
@@ -101,14 +111,5 @@ impl State {
 
     pub fn get_project(&self) -> &SourcePath {
         self.project_path.get().unwrap()
-    }
-
-    pub fn set_lang_id(&self, uri: &Uri, lang_id: &str) {
-        self.lang_id.insert(uri.source_path(), lang_id.into());
-    }
-
-    pub fn get_lang_id(&self, uri: &Uri) -> Option<String> {
-        let path = &uri.source_path();
-        self.lang_id.get(path).map(|guard| guard.clone())
     }
 }

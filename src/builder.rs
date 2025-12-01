@@ -9,7 +9,14 @@ use pest_derive::Parser;
 use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
 
+use sha2::{Digest, Sha256};
+
 use crate::state::{Source, SourcePath, State, ToSource, ToSourcePath};
+
+pub const BUILD_FILE: &'static str = "build.js.emitted";
+
+#[cfg(debug_assertions)]
+const BUILD_SOURCEMAP_FILE: &'static str = "build.js.emitted.map";
 
 #[derive(Parser)]
 #[grammar = "./glscript_subset_grammar.pest"]
@@ -97,19 +104,29 @@ impl Build {
         }
     }
 
-    pub fn build(state: &State, uri: &Uri) -> anyhow::Result<Build> {
+    pub fn build(state: &State, uri: &Uri) -> anyhow::Result<Self> {
         let mut smb = SourceMapBuilder::new(None);
         let mut visited_sources = HashSet::<Source>::with_capacity(100);
         let project = state.get_project();
-        let text = Build::emit(state, uri, project, &mut smb, &mut 0, &mut visited_sources)?;
+        let text = Self::emit(state, uri, project, &mut smb, &mut 0, &mut visited_sources)?;
         let source_map = smb.into_sourcemap();
-        let b = Build {
+
+        #[cfg(debug_assertions)]
+        {
+            let mut sm_json = Vec::new();
+            let _ = source_map.to_writer(&mut sm_json);
+            let emitted_source_map = String::from_utf8(sm_json).unwrap();
+            let _ = fs::write(project.join(BUILD_SOURCEMAP_FILE), emitted_source_map);
+            let emitted_build = format!("{text}\n//# sourceMappingURL=/{BUILD_SOURCEMAP_FILE}");
+            let _ = fs::write(project.join(BUILD_FILE), emitted_build);
+        }
+
+        let b = Self {
             text,
             source_map,
             project: project.to_owned(),
         };
 
-        dbg!((uri.source_path().source(project), b.sources(), &b.text));
         Ok(b)
     }
 }
@@ -124,12 +141,7 @@ impl Build {
         visited: &mut HashSet<String>,
     ) -> anyhow::Result<String> {
         // TODO: refactor unwrap() with Architectural purity behaviour
-        // let path = &uri.source_path();
-        let path = &uri
-            .to_file_path()
-            .map_err(|_| anyhow::anyhow!("invalid file uri: {uri}"))?
-            .canonicalize()?;
-
+        let path = &uri.try_source_path()?;
         let source = &path.source(project);
         match visited.contains(source) {
             true => return Ok("".into()),
@@ -146,28 +158,56 @@ impl Build {
 
         assert!(!raw_text.contains("\r\n"));
 
+        const DECL_PREFIX: &'static str = "/** @typedef";
+        const LINK_PREFIX: &'static str = "/** {@link ";
+        const MODULE_PREFIX: &'static str = "$MODULE_";
+
+        let ident = Self::source_hash(&source);
+        let module_decl = format!("{DECL_PREFIX} {{'{source}'}} {MODULE_PREFIX}{ident} */\n");
+        smb.add(*dst_line, 0, 0, 0, Some(source), None, false);
+        *dst_line += 1;
+
         let emitted_source_file = GlScriptSubsetGrammar::parse(self::Rule::SourceFile, &raw_text)?
             .next()
             .ok_or(anyhow::Error::msg("NodeNotFound"))?
             .into_inner()
-            .fold("".into(), |acc, r| match r.as_rule() {
+            .fold(module_decl, |acc, r| match r.as_rule() {
                 self::Rule::IncludeToken => acc,
                 self::Rule::IncludePath => {
                     let sp = r.as_span();
+                    let line_col = sp.start_pos().line_col();
+                    let (line, col) = (line_col.0 as u32 - 1, line_col.1 as u32 - 1);
+
                     let path_lit = &sp.as_str();
                     let dep_rpath = &path_lit.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
-                    let dep_path = Build::resolve_path(path, project, dep_rpath);
+                    let dep_path = Self::resolve_path(path, project, dep_rpath);
                     let dep_uri = Uri::from_file_path(&dep_path).unwrap();
-                    let dep_text =
-                        match Build::emit(&state, &dep_uri, project, smb, dst_line, visited) {
-                            Ok(text) => {
-                                let blk = " ".repeat(sp.start_pos().line_col().1 - 1 + text.len());
-                                format!("{}{}", text, blk)
-                            }
-                            _ => "".into(),
-                        };
+                    let dep_source = match dep_uri.try_source_path() {
+                        Ok(dep_source_path) => dep_source_path.source(project),
+                        _ => "".to_owned(),
+                    };
+                    let dep_ident = Self::source_hash(&dep_source);
 
-                    acc + dep_text.as_str()
+                    let link_ref = format!("\n{LINK_PREFIX}{MODULE_PREFIX}{dep_ident}}} */\n");
+                    let prefix = LINK_PREFIX.len() as u32;
+                    let suffix = prefix + MODULE_PREFIX.len() as u32 + dep_ident.len() as u32;
+                    let acc_buf = acc + link_ref.as_str() + "\n";
+
+                    *dst_line += 1;
+                    smb.add(*dst_line, prefix, line, col, Some(source), None, false);
+                    smb.add(*dst_line, suffix, 0, 0, None, None, false);
+                    *dst_line += 2;
+
+                    let dep_build = Self::emit(&state, &dep_uri, project, smb, dst_line, visited);
+                    let dep_text = match dep_build {
+                        Ok(emitted_dep_text) => {
+                            let blk = " ".repeat(col as usize + path_lit.len());
+                            format!("{}{}", emitted_dep_text, blk)
+                        }
+                        _ => "".into(),
+                    };
+
+                    acc_buf + dep_text.as_str()
                 }
                 _ => {
                     let line_col = r.as_span().start_pos().line_col();
@@ -220,5 +260,15 @@ impl Build {
         } else {
             normalize_path(&project_root.join(path))
         }
+    }
+
+    /// compatibility ECMAScript identifier hash from [`Source`]
+    #[inline]
+    fn source_hash(source: &Source) -> String {
+        let digest = Sha256::digest(source.as_bytes());
+        let hex = hex::encode(digest);
+        let hash = format!("{:_<width$}", hex, width = &source.len());
+
+        hash
     }
 }

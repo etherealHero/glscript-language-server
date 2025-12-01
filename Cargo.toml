@@ -32,6 +32,8 @@ pest_derive = "2.8.1"
 
 # builder
 sourcemap = "9.2.2"
+sha2 = "0.10.9"
+hex = "0.4.3"
 
 anyhow = "1.0.100"
 
