@@ -126,7 +126,7 @@ impl LanguageServer for Proxy {
                 match build.forward_src_range(&change.range.unwrap(), uri) {
                     Some(r) => forward_changes.push(lsp::TextDocumentContentChangeEvent {
                         range: Some(r),
-                        range_length: change.range_length, // TODO: validate length with escape \r\n
+                        range_length: change.range_length,
                         text: change.text.replace("\r\n", "\n"),
                     }),
                     None => has_forward_err = true,
@@ -137,8 +137,9 @@ impl LanguageServer for Proxy {
 
             forward_params.text_document.version = new_build_with_version.version;
 
-            if new_build_with_version.build.sources() != build_sources || /* FIXME: */ has_forward_err
-            {
+            assert!(!has_forward_err);
+
+            if new_build_with_version.build.sources() != build_sources {
                 *forward_changes = vec![lsp::TextDocumentContentChangeEvent {
                     range: None,
                     range_length: None,
@@ -194,11 +195,9 @@ impl LanguageServer for Proxy {
             if let Some(forwarded_pos) = build.forward_src_position(pos, uri) {
                 *pos = forwarded_pos;
                 let hover_response: ResReq<R::HoverRequest> = service.hover(params).await;
-                // FIXME: deduplicate function signature: tsx```<signature><signature>```
-                // ```tsx\nfunction sum(a: number, b: number): number\nfunction sum(a: number, b: number): number\n```
                 hover_response.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
             } else {
-                let err = format!("Forward src position `{pos:?}` failed"); // FIXME: skip include stmt
+                let err = format!("Forward src position `{pos:?}` failed");
                 Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err))
             }
         })
@@ -229,7 +228,7 @@ impl LanguageServer for Proxy {
             let forward_pos = build.forward_src_position(pos, uri);
 
             if forward_pos.is_none() {
-                let err = format!("Forward src position `{pos:?}` failed"); // FIXME: skip include stmt
+                let err = format!("Forward src position `{pos:?}` failed");
                 return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
             }
 
@@ -249,7 +248,7 @@ impl LanguageServer for Proxy {
             fn forward_range(range: &mut lsp::Range, build: &Build) -> Result<Uri, ResponseError> {
                 let source_range = build.forward_build_range(&range);
                 if source_range.is_none() {
-                    let err = format!("Forward back build range `{:?}` failed", range); // FIXME: skip include stmt
+                    let err = format!("Forward back build range `{:?}` failed", range);
                     return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
                 }
                 let source_range = source_range.unwrap();

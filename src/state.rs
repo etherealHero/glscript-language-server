@@ -96,7 +96,7 @@ impl State {
     }
 
     pub fn set_doc(&self, uri: &Uri, text: &String) {
-        let text = text.replace("\r\n", "\n").replace("\r", ""); // FIXME: ???
+        let text = text.replace("\r\n", "\n").replace("\r", "");
         self.documents.insert(uri.source_path(), text);
     }
 

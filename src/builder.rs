@@ -84,7 +84,7 @@ impl Build {
         }
 
         if res.unwrap().get_source().is_none() {
-            return None; // FIXME: parse error or include stmt???
+            return None;
         }
 
         let t = res.unwrap();
@@ -140,7 +140,6 @@ impl Build {
         dst_line: &mut u32,
         visited: &mut HashSet<String>,
     ) -> anyhow::Result<String> {
-        // TODO: refactor unwrap() with Architectural purity behaviour
         let path = &uri.try_source_path()?;
         let source = &path.source(project);
         match visited.contains(source) {
