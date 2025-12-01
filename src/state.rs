@@ -50,16 +50,16 @@ pub trait ToSource {
 impl ToSource for SourcePath {
     fn source(&self, root: &SourcePath) -> Source {
         self.strip_prefix(root)
-            .unwrap()
+            .expect("existed source of project")
             .to_str()
-            .unwrap()
+            .expect("existed source of project")
             .to_lowercase()
     }
 }
 
 impl State {
     pub fn set_build(&self, uri: &Uri) -> BuildWithVersion {
-        let new_build = Build::build(&self, uri).unwrap();
+        let new_build = Build::build(&self, uri).expect("build success");
         let path = &uri.source_path();
 
         match self.builds.get_mut(path) {
@@ -76,7 +76,10 @@ impl State {
             }
         }
 
-        self.builds.get(path).map(|guard| guard.clone()).unwrap()
+        self.builds
+            .get(path)
+            .map(|guard| guard.clone())
+            .expect("build saved")
     }
 
     pub fn get_build(&self, uri: &Uri) -> Option<Build> {
@@ -106,10 +109,12 @@ impl State {
     }
 
     pub fn set_project(&self, uri: &Uri) {
-        self.project_path.set(uri.source_path()).unwrap();
+        self.project_path
+            .set(uri.source_path())
+            .expect("project set once");
     }
 
     pub fn get_project(&self) -> &SourcePath {
-        self.project_path.get().unwrap()
+        self.project_path.get().expect("project installed")
     }
 }

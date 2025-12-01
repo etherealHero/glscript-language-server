@@ -47,7 +47,7 @@ impl Build {
         }
 
         for t in self.source_map.tokens() {
-            if t.get_source().unwrap_or_default() != source {
+            if t.get_source().is_none() || source != t.get_source().expect("has source") {
                 continue;
             }
             if t.get_src_line() == pos.line && t.get_src_col() <= pos.character {
@@ -77,22 +77,18 @@ impl Build {
     }
 
     pub fn forward_build_position(&self, pos: &lsp::Position) -> Option<(lsp::Position, Uri)> {
-        let res = self.source_map.lookup_token(pos.line, pos.character);
-
-        if res.is_none() {
-            return None;
+        match self.source_map.lookup_token(pos.line, pos.character) {
+            Some(t) if t.get_source().is_none() => return None,
+            None => return None,
+            Some(t) => {
+                let line = t.get_src_line();
+                let character = t.get_src_col() + (pos.character - t.get_dst_col());
+                let source = t.get_source().expect("forward back token must have source");
+                let source_uri =
+                    Uri::from_file_path(self.project.join(source)).expect("valid source");
+                Some((lsp::Position::new(line, character), source_uri))
+            }
         }
-
-        if res.unwrap().get_source().is_none() {
-            return None;
-        }
-
-        let t = res.unwrap();
-        let line = t.get_src_line();
-        let character = t.get_src_col() + (pos.character - t.get_dst_col());
-        let source_uri = Uri::from_file_path(self.project.join(t.get_source().unwrap())).unwrap();
-
-        Some((lsp::Position::new(line, character), source_uri))
     }
 
     pub fn forward_build_range(&self, range: &lsp::Range) -> Option<(lsp::Range, Uri)> {
@@ -115,7 +111,7 @@ impl Build {
         {
             let mut sm_json = Vec::new();
             let _ = source_map.to_writer(&mut sm_json);
-            let emitted_source_map = String::from_utf8(sm_json).unwrap();
+            let emitted_source_map = String::from_utf8(sm_json).expect("stringify sourcemap");
             let _ = fs::write(project.join(BUILD_SOURCEMAP_FILE), emitted_source_map);
             let emitted_build = format!("{text}\n//# sourceMappingURL=/{BUILD_SOURCEMAP_FILE}");
             let _ = fs::write(project.join(BUILD_FILE), emitted_build);
@@ -152,7 +148,7 @@ impl Build {
         } else {
             let text = fs::read_to_string(path)?;
             state.set_doc(uri, &text);
-            state.get_doc(uri).unwrap()
+            state.get_doc(uri).expect("doc saved in mem")
         };
 
         assert!(!raw_text.contains("\r\n"));
@@ -180,7 +176,7 @@ impl Build {
                     let path_lit = &sp.as_str();
                     let dep_rpath = &path_lit.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
                     let dep_path = Self::resolve_path(path, project, dep_rpath);
-                    let dep_uri = Uri::from_file_path(&dep_path).unwrap();
+                    let dep_uri = Uri::from_file_path(&dep_path).expect("valid dep_path");
                     let dep_source = match dep_uri.try_source_path() {
                         Ok(dep_source_path) => dep_source_path.source(project),
                         _ => "".to_owned(),

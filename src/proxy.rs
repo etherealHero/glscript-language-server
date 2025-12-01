@@ -23,11 +23,11 @@ pub struct Proxy {
 
 impl Proxy {
     pub fn server(&self) -> ServerSocket {
-        self.server.get().unwrap().clone()
+        self.server.get().expect("server socket linked").clone()
     }
 
     pub fn client(&self) -> ClientSocket {
-        self.client.get().unwrap().clone()
+        self.client.get().expect("client socket linked").clone()
     }
 
     pub fn init(

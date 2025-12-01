@@ -43,11 +43,11 @@ async fn main() {
     let (mock_client, server_socket) = async_lsp::MainLoop::new_client(|_| client);
     let (mock_server, client_socket) = async_lsp::MainLoop::new_server(|_| server);
 
-    ref_server.set(client_socket).unwrap();
-    ref_client.set(server_socket).unwrap();
+    ref_server.set(client_socket).expect("set client socket");
+    ref_client.set(server_socket).expect("set server socket");
 
-    let child_stdin = child.stdin.take().unwrap();
-    let child_stdout = child.stdout.take().unwrap();
+    let child_stdin = child.stdin.take().expect("take tsls stdin");
+    let child_stdout = child.stdout.take().expect("take tsls stdout");
     let main1 = tokio::spawn(mock_client.run_buffered(child_stdout, child_stdin));
 
     let stdin = tokio::io::stdin().compat();
@@ -58,5 +58,5 @@ async fn main() {
         ret = main1 => ret,
         ret = main2 => ret,
     };
-    ret.expect("join error").unwrap();
+    ret.expect("join error").expect("valid proxy lifecycle");
 }

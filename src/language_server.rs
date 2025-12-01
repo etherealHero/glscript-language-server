@@ -72,14 +72,14 @@ impl LanguageServer for Proxy {
             } else {
                 let mut changes = changes.to_vec();
                 changes.sort_by(|a, b| {
-                    let ra = a.range.unwrap();
-                    let rb = b.range.unwrap();
+                    let ra = a.range.expect("is some");
+                    let rb = b.range.expect("is some");
                     (ra.start.line, ra.start.character).cmp(&(rb.start.line, rb.start.character))
                 });
 
                 for change in changes.into_iter().rev() {
                     text.ends_with("\n").then(|| text.push_str("\n"));
-                    let lsp::Range { start, end } = change.range.unwrap();
+                    let lsp::Range { start, end } = change.range.expect("is some");
                     let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
                     let start_line = &mut lines[start.line as usize];
                     let left = start_line[..start.character as usize].to_string();
@@ -103,7 +103,7 @@ impl LanguageServer for Proxy {
                 current_build_traversed = true
             }
 
-            let build_uri = &Uri::from_file_path(build_source_path).unwrap();
+            let build_uri = &Uri::from_file_path(build_source_path).expect("valid build entry uri");
             let build = self.state.get_build(build_uri).expect("iteration build");
             let build_sources = build.sources().clone();
 
@@ -123,7 +123,7 @@ impl LanguageServer for Proxy {
                     continue;
                 }
 
-                match build.forward_src_range(&change.range.unwrap(), uri) {
+                match build.forward_src_range(&change.range.expect("is some"), uri) {
                     Some(r) => forward_changes.push(lsp::TextDocumentContentChangeEvent {
                         range: Some(r),
                         range_length: change.range_length,
@@ -232,7 +232,7 @@ impl LanguageServer for Proxy {
                 return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
             }
 
-            *pos = forward_pos.unwrap();
+            *pos = forward_pos.expect("is some");
 
             let res: ResReq<R::GotoDefinition> = service.definition(params).await;
             let res = res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e));
@@ -241,7 +241,7 @@ impl LanguageServer for Proxy {
                 return res;
             }
 
-            if res.is_ok() && res.as_ref().unwrap().is_none() {
+            if res.is_ok() && res.as_ref().expect("is some").is_none() {
                 return res;
             }
 
@@ -251,12 +251,12 @@ impl LanguageServer for Proxy {
                     let err = format!("Forward back build range `{:?}` failed", range);
                     return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
                 }
-                let source_range = source_range.unwrap();
+                let source_range = source_range.expect("is some");
                 *range = source_range.0;
                 Ok(source_range.1)
             }
 
-            let ts_definition_response = res.unwrap().unwrap();
+            let ts_definition_response = res.expect("is some").expect("is some");
             let forward_res: lsp::GotoDefinitionResponse = match ts_definition_response {
                 lsp::GotoDefinitionResponse::Scalar(mut location) if &location.uri == uri => {
                     match forward_range(&mut location.range, &build) {
