@@ -1,12 +1,13 @@
 use std::ops::ControlFlow;
+use tokio::time::{Duration, timeout};
 
 use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::lsp_types::{notification::Notification, request::Request};
 use async_lsp::{ErrorCode, LanguageServer, ResponseError};
 
-use crate::builder::{BUILD_FILE, Build};
-use crate::proxy::{JS_LANG_ID, Proxy, ResFut, ResReq};
+use crate::builder::{BUILD_FILE, Build, MODULE_PREFIX};
+use crate::proxy::{DECL_FILE_EXT, JS_LANG_ID, Proxy, ResFut, ResReq, ResReqProxy};
 use crate::state::{ToSource, ToSourcePath};
 
 impl LanguageServer for Proxy {
@@ -176,6 +177,7 @@ impl LanguageServer for Proxy {
     fn hover(&mut self, mut params: lsp::HoverParams) -> ResFut<R::HoverRequest> {
         let mut service = self.server();
         let uri = &params.text_document_position_params.text_document.uri;
+        let pos = &params.text_document_position_params.position;
 
         let build: Build;
         match self.state.get_build(uri) {
@@ -188,18 +190,55 @@ impl LanguageServer for Proxy {
             Some(b) => build = b,
         };
 
+        let decl_req = self.definition(lsp::GotoDefinitionParams {
+            text_document_position_params: lsp::TextDocumentPositionParams::new(
+                lsp::TextDocumentIdentifier::new(uri.clone()),
+                pos.clone(),
+            ),
+            work_done_progress_params: lsp::WorkDoneProgressParams::default(),
+            partial_result_params: lsp::PartialResultParams::default(),
+        });
+
         Box::pin(async move {
             let uri = &params.text_document_position_params.text_document.uri;
+            let uri_clone = uri.clone();
             let pos = &mut params.text_document_position_params.position;
 
-            if let Some(forwarded_pos) = build.forward_src_position(pos, uri) {
-                *pos = forwarded_pos;
-                let hover_response: ResReq<R::HoverRequest> = service.hover(params).await;
-                hover_response.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
-            } else {
+            let forward = build.forward_src_position(pos, uri);
+
+            if forward.is_none() {
                 let err = format!("Forward src position `{pos:?}` failed");
-                Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err))
+                return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
             }
+
+            forward.map(|forward_pos| *pos = forward_pos);
+
+            let hover: ResReq<R::HoverRequest> = service.hover(params).await;
+            let hover = hover.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))?;
+
+            if hover.is_none() {
+                return Ok(None);
+            }
+
+            let mut hover = strip_module_hash(hover.expect("is some"));
+
+            if let Some(mut r) = hover.range {
+                if !forward_build_range(&mut r, &build).is_ok_and(|uri| uri == uri_clone) {
+                    hover.range = None
+                }
+            }
+
+            let decl: ResReqProxy<R::GotoDefinition> =
+                timeout(Duration::from_millis(200), decl_req)
+                    .await
+                    .unwrap_or(Ok(None));
+
+            if matches!(decl, Ok(Some(DefRes::Link(l))) if l.is_empty()) {
+                let msg = "⚠ No definiion available for this item.";
+                return Ok(Some(prepend_hover(hover, msg)));
+            }
+
+            Ok(Some(hover))
         })
     }
 
@@ -237,103 +276,129 @@ impl LanguageServer for Proxy {
             let res: ResReq<R::GotoDefinition> = service.definition(params).await;
             let res = res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e));
 
-            if res.is_err() {
+            if res.is_err() || res.as_ref().expect("is some").is_none() {
                 return res;
             }
 
-            if res.is_ok() && res.as_ref().expect("is some").is_none() {
-                return res;
-            }
+            let forward_location_links = |links: Vec<lsp::LocationLink>| -> Result<DefRes, _> {
+                let mut forward_links = vec![];
+                for mut link in links {
+                    if &link.target_uri == uri {
+                        let source_uri = forward_build_range(&mut link.target_range, &build)?;
+                        link.target_uri = source_uri;
 
-            fn forward_range(range: &mut lsp::Range, build: &Build) -> Result<Uri, ResponseError> {
-                let source_range = build.forward_build_range(&range);
-                if source_range.is_none() {
-                    let err = format!("Forward back build range `{:?}` failed", range);
-                    return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
-                }
-                let source_range = source_range.expect("is some");
-                *range = source_range.0;
-                Ok(source_range.1)
-            }
+                        forward_build_range(&mut link.target_selection_range, &build)?;
 
-            let ts_definition_response = res.expect("is some").expect("is some");
-            let forward_res: lsp::GotoDefinitionResponse = match ts_definition_response {
-                lsp::GotoDefinitionResponse::Scalar(mut location) if &location.uri == uri => {
-                    match forward_range(&mut location.range, &build) {
-                        Ok(uri) => location.uri = uri,
-                        Err(err) => return Err(err),
-                    };
-                    lsp::GotoDefinitionResponse::Scalar(location)
-                }
-                lsp::GotoDefinitionResponse::Array(locations) => {
-                    let mut forward_locations = vec![];
-                    for loc in locations {
-                        let mut forward_loc;
-
-                        // emitted reference
-                        if &loc.uri == uri {
-                            forward_loc = loc.clone();
-                            match forward_range(&mut forward_loc.range, &build) {
-                                Ok(uri) => forward_loc.uri = uri,
-                                Err(err) => return Err(err),
-                            };
-                            forward_locations.push(forward_loc);
+                        if link.origin_selection_range.is_none() {
+                            forward_links.push(link);
                             continue;
                         }
 
-                        let loc_source = &loc.uri.source_path().source(&project);
-                        let is_build_file = loc.uri.source_path().ends_with(BUILD_FILE);
-                        if build_sources.contains(loc_source) || is_build_file {
-                            continue; // skip duplicated source references
+                        let origin = &mut link.origin_selection_range.expect("is some");
+                        if forward_build_range(origin, &build).is_err() {
+                            link.origin_selection_range = None;
                         }
 
-                        forward_locations.push(loc.to_owned()); // .d.ts reference
+                        forward_links.push(link);
+                        continue;
                     }
-                    lsp::GotoDefinitionResponse::Array(forward_locations)
-                }
-                lsp::GotoDefinitionResponse::Link(location_links) => {
-                    let mut forward_locations = vec![];
-                    for loc in location_links {
-                        let mut forward_loc;
 
-                        // emitted reference
-                        if &loc.target_uri == uri {
-                            forward_loc = loc.clone();
+                    let link_source = &link.target_uri.source_path().source(&project);
+                    let is_build_file = link.target_uri.source_path().ends_with(BUILD_FILE);
 
-                            match forward_range(&mut forward_loc.target_range, &build) {
-                                Ok(uri) => forward_loc.target_uri = uri,
-                                Err(err) => return Err(err),
-                            };
-                            match forward_range(&mut forward_loc.target_selection_range, &build) {
-                                Ok(_) => {}
-                                Err(err) => return Err(err),
-                            };
-                            if let Some(mut range) = forward_loc.origin_selection_range {
-                                match forward_range(&mut range, &build) {
-                                    Ok(_) => {}
-                                    Err(_) => forward_loc.origin_selection_range = None,
-                                    //  ^ fired on include path definition req
-                                };
-                            }
-
-                            forward_locations.push(forward_loc);
-                            continue;
-                        }
-
-                        let loc_source = &loc.target_uri.source_path().source(&project);
-                        let is_build_file = loc.target_uri.source_path().ends_with(BUILD_FILE);
-                        if build_sources.contains(loc_source) || is_build_file {
-                            continue; // skip duplicated source references
-                        }
-
-                        forward_locations.push(loc.to_owned()); // .d.ts reference
+                    if build_sources.contains(link_source) || is_build_file {
+                        continue;
                     }
-                    lsp::GotoDefinitionResponse::Link(forward_locations)
+
+                    if link_source.ends_with(DECL_FILE_EXT) {
+                        forward_links.push(link.to_owned());
+                    }
                 }
-                _ => ts_definition_response, // .d.ts reference
+                Ok(DefRes::Link(forward_links))
+            };
+
+            let ts_definition_response = res?.expect("is some");
+            let forward_res: DefRes = match ts_definition_response {
+                DefRes::Link(location_links) => forward_location_links(location_links)?,
+                DefRes::Scalar(location) => forward_location_links(vec![lsp::LocationLink {
+                    origin_selection_range: None,
+                    target_uri: location.uri.clone(),
+                    target_range: location.range,
+                    target_selection_range: location.range,
+                }])?,
+                DefRes::Array(locations) => forward_location_links(
+                    locations
+                        .iter()
+                        .map(|l| lsp::LocationLink {
+                            origin_selection_range: None,
+                            target_uri: l.uri.clone(),
+                            target_range: l.range,
+                            target_selection_range: l.range,
+                        })
+                        .collect(),
+                )?,
             };
 
             Ok(Some(forward_res))
         })
     }
+}
+
+type DefRes = lsp::GotoDefinitionResponse;
+
+#[inline]
+fn forward_build_range(range: &mut lsp::Range, build: &Build) -> Result<Uri, ResponseError> {
+    let source_range = build.forward_build_range(&range);
+    if source_range.is_none() {
+        let err = format!("Forward back build range `{:?}` failed", range);
+        return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
+    }
+    let source_range = source_range.expect("is some");
+    *range = source_range.0;
+    Ok(source_range.1)
+}
+
+#[inline]
+fn prepend_hover(mut hover: lsp::Hover, msg: &str) -> lsp::Hover {
+    type H = lsp::HoverContents;
+    type S = lsp::MarkedString;
+
+    match &mut hover.contents {
+        H::Scalar(S::String(s)) => {
+            let mut new = msg.to_string();
+            new.push_str("\n\n");
+            new.push_str(s.clone().as_str());
+            *s = new;
+        }
+        H::Scalar(S::LanguageString(s)) => s.value = format!("{msg}\n\n{}", s.value),
+        H::Array(ms) => ms.insert(0, S::String(msg.to_string())),
+        H::Markup(m) => m.value = format!("{msg}\n\n{}", m.value),
+    };
+
+    hover
+}
+
+#[inline]
+fn strip_module_hash(mut hover: lsp::Hover) -> lsp::Hover {
+    type H = lsp::HoverContents;
+    type S = lsp::MarkedString;
+
+    let re = regex::Regex::new(&format!(r"{}\w+", regex::escape(MODULE_PREFIX))).expect("valid re");
+    let patch = |s: &str| re.replace_all(s, "MODULE").to_string();
+
+    match &mut hover.contents {
+        H::Scalar(S::String(s)) => *s = patch(s),
+        H::Scalar(S::LanguageString(s)) => s.value = patch(&s.value),
+        H::Array(items) => {
+            for item in items {
+                match item {
+                    S::String(s) => *s = patch(s),
+                    S::LanguageString(ls) => ls.value = patch(&ls.value),
+                }
+            }
+        }
+        H::Markup(m) => m.value = patch(&m.value),
+    }
+
+    hover
 }

@@ -18,6 +18,10 @@ pub const BUILD_FILE: &'static str = "build.js.emitted";
 #[cfg(debug_assertions)]
 const BUILD_SOURCEMAP_FILE: &'static str = "build.js.emitted.map";
 
+const DECL_PREFIX: &'static str = "/** @typedef";
+const LINK_PREFIX: &'static str = "/** {@link ";
+pub const MODULE_PREFIX: &'static str = "$MODULE_";
+
 #[derive(Parser)]
 #[grammar = "./glscript_subset_grammar.pest"]
 struct GlScriptSubsetGrammar;
@@ -111,7 +115,7 @@ impl Build {
         {
             let mut sm_json = Vec::new();
             let _ = source_map.to_writer(&mut sm_json);
-            let emitted_source_map = String::from_utf8(sm_json).expect("stringify sourcemap");
+            let emitted_source_map = String::from_utf8(sm_json)?;
             let _ = fs::write(project.join(BUILD_SOURCEMAP_FILE), emitted_source_map);
             let emitted_build = format!("{text}\n//# sourceMappingURL=/{BUILD_SOURCEMAP_FILE}");
             let _ = fs::write(project.join(BUILD_FILE), emitted_build);
@@ -152,10 +156,6 @@ impl Build {
         };
 
         assert!(!raw_text.contains("\r\n"));
-
-        const DECL_PREFIX: &'static str = "/** @typedef";
-        const LINK_PREFIX: &'static str = "/** {@link ";
-        const MODULE_PREFIX: &'static str = "$MODULE_";
 
         let ident = Self::source_hash(&source);
         let module_decl = format!("{DECL_PREFIX} {{'{source}'}} {MODULE_PREFIX}{ident} */\n");
