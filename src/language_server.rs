@@ -8,7 +8,10 @@ use async_lsp::{ErrorCode, LanguageServer, ResponseError};
 
 use crate::builder::{BUILD_FILE, Build, MODULE_PREFIX};
 use crate::proxy::{DECL_FILE_EXT, JS_LANG_ID, Proxy, ResFut, ResReq, ResReqProxy};
-use crate::state::{ToSource, ToSourcePath};
+use crate::state::{Canonicalize, ToSource, ToSourcePath};
+
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 
 impl LanguageServer for Proxy {
     type Error = ResponseError;
@@ -16,7 +19,23 @@ impl LanguageServer for Proxy {
 
     fn initialize(&mut self, params: lsp::InitializeParams) -> ResFut<R::Initialize> {
         if let Some([root_ws, ..]) = params.workspace_folders.as_deref() {
-            self.state.set_project(&root_ws.uri);
+            let project_uri = &root_ws.uri;
+            self.state.set_project(project_uri);
+
+            let global_script = params
+                .initialization_options
+                .as_ref()
+                .and_then(|opt| opt.as_object())
+                .and_then(|m| m.get("proxy"))
+                .and_then(|v| v.as_object())
+                .and_then(|p| p.get("globalScript"))
+                .and_then(|v| v.as_str());
+
+            if let Some(doc) = global_script {
+                let global_doc_uri = Uri::from_file_path(&project_uri.source_path().join(doc))
+                    .expect("valid global doc uri");
+                self.state.set_global_doc(&global_doc_uri);
+            }
         }
 
         let mut service = self.server();
@@ -42,14 +61,20 @@ impl LanguageServer for Proxy {
     }
 
     fn did_open(&mut self, params: lsp::DidOpenTextDocumentParams) -> Self::NotifyResult {
-        let mut doc = params.text_document;
+        let doc = &params.text_document;
         if doc.language_id == JS_LANG_ID && !doc.uri.source_path().ends_with(BUILD_FILE) {
             self.state.set_doc(&doc.uri, &doc.text);
             let build_with_version = self.state.set_build(&doc.uri);
-            doc.text = build_with_version.build.text;
-            doc.version = build_with_version.version;
+            let _ = self.server().did_open(lsp::DidOpenTextDocumentParams {
+                text_document: lsp::TextDocumentItem::new(
+                    build_with_version.build.emit_uri,
+                    JS_LANG_ID.into(),
+                    build_with_version.version,
+                    build_with_version.build.emit_text,
+                ),
+            });
         }
-        let params = lsp::DidOpenTextDocumentParams { text_document: doc };
+
         let _ = self.server().did_open(params);
         ControlFlow::Continue(())
     }
@@ -97,27 +122,18 @@ impl LanguageServer for Proxy {
         }
 
         // 2. forward params into language server
-        let mut current_build_traversed = false;
+        let mut builds_for_changes = self.state.get_builds_contains_document(uri);
+        builds_for_changes
+            .sort_by(|a, b| (a != &uri.source_path()).cmp(&(b != &uri.source_path())));
 
-        for ref build_source_path in self.state.get_builds_contains_document(uri) {
-            if build_source_path == &uri.source_path() {
-                current_build_traversed = true
-            }
+        let mut sources_changed = false;
 
+        assert!(builds_for_changes.contains(&uri.source_path()));
+
+        for ref build_source_path in builds_for_changes {
             let build_uri = &Uri::from_file_path(build_source_path).expect("valid build entry uri");
             let build = self.state.get_build(build_uri).expect("iteration build");
-            let build_sources = build.sources().clone();
-
-            let mut forward_params = lsp::DidChangeTextDocumentParams {
-                text_document: lsp::VersionedTextDocumentIdentifier {
-                    uri: build_uri.clone(),
-                    version: 0, // will rewrite later
-                },
-                content_changes: vec![],
-            };
-
-            let forward_changes = &mut forward_params.content_changes;
-            let mut has_forward_err = false;
+            let mut forward_changes = vec![];
 
             for change in &params.content_changes {
                 if change.range.is_none() {
@@ -130,46 +146,50 @@ impl LanguageServer for Proxy {
                         range_length: change.range_length,
                         text: change.text.replace("\r\n", "\n"),
                     }),
-                    None => has_forward_err = true,
+                    None => panic!("forward_src_range failed on did_change"),
                 };
             }
 
             let new_build_with_version = self.state.set_build(build_uri);
 
-            forward_params.text_document.version = new_build_with_version.version;
-
-            assert!(!has_forward_err);
-
-            if new_build_with_version.build.sources() != build_sources {
-                *forward_changes = vec![lsp::TextDocumentContentChangeEvent {
-                    range: None,
-                    range_length: None,
-                    text: new_build_with_version.build.text,
-                }];
+            if new_build_with_version.build.emit_hash != build.emit_hash {
+                sources_changed = true;
             }
+
+            let forward_params = lsp::DidChangeTextDocumentParams {
+                text_document: lsp::VersionedTextDocumentIdentifier {
+                    uri: new_build_with_version.build.emit_uri.clone(),
+                    version: new_build_with_version.version,
+                },
+                content_changes: if sources_changed {
+                    vec![lsp::TextDocumentContentChangeEvent {
+                        text: new_build_with_version.build.emit_text,
+                        range_length: None,
+                        range: None,
+                    }]
+                } else {
+                    forward_changes
+                },
+            };
 
             let _ = self.server().did_change(forward_params);
         }
 
-        assert!(
-            current_build_traversed,
-            "{} should be traversed",
-            uri.source_path().source(self.state.get_project())
-        );
-
+        let _ = self.server().did_change(params);
         ControlFlow::Continue(())
     }
 
-    fn did_save(&mut self, mut params: lsp::DidSaveTextDocumentParams) -> Self::NotifyResult {
-        let uri = &params.text_document.uri;
-        if let (_, Some(build)) = (params.text.is_some(), self.state.get_build(uri)) {
-            params.text = Some(build.text);
-        }
+    fn did_save(&mut self, params: lsp::DidSaveTextDocumentParams) -> Self::NotifyResult {
         let _ = self.server().did_save(params);
         ControlFlow::Continue(())
     }
 
     fn did_close(&mut self, params: lsp::DidCloseTextDocumentParams) -> Self::NotifyResult {
+        self.state.get_build(&params.text_document.uri).map(|b| {
+            let _ = self.server().did_close(lsp::DidCloseTextDocumentParams {
+                text_document: lsp::TextDocumentIdentifier::new(b.emit_uri),
+            });
+        });
         let _ = self.server().did_close(params);
         ControlFlow::Continue(())
     }
@@ -200,18 +220,20 @@ impl LanguageServer for Proxy {
         });
 
         Box::pin(async move {
-            let uri = &params.text_document_position_params.text_document.uri;
-            let uri_clone = uri.clone();
+            let uri = &mut params.text_document_position_params.text_document.uri;
+            let uri_canonicalized = uri.canonicalize();
             let pos = &mut params.text_document_position_params.position;
 
-            let forward = build.forward_src_position(pos, uri);
+            // TODO: create util
+            let build_pos = build.forward_src_position(pos, uri);
 
-            if forward.is_none() {
+            if build_pos.is_none() {
                 let err = format!("Forward src position `{pos:?}` failed");
                 return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
             }
 
-            forward.map(|forward_pos| *pos = forward_pos);
+            *pos = build_pos.expect("is some");
+            *uri = build.emit_uri.clone();
 
             let hover: ResReq<R::HoverRequest> = service.hover(params).await;
             let hover = hover.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))?;
@@ -223,7 +245,9 @@ impl LanguageServer for Proxy {
             let mut hover = strip_module_hash(hover.expect("is some"));
 
             if let Some(mut r) = hover.range {
-                if !forward_build_range(&mut r, &build).is_ok_and(|uri| uri == uri_clone) {
+                if !forward_build_range(&mut r, &build)
+                    .is_ok_and(|source_uri| source_uri.canonicalize() == uri_canonicalized)
+                {
                     hover.range = None
                 }
             }
@@ -246,7 +270,7 @@ impl LanguageServer for Proxy {
         let mut service = self.server();
         let uri = &params.text_document_position_params.text_document.uri;
 
-        let build: Build;
+        let req_build: Build;
         match self.state.get_build(uri) {
             None => {
                 return Box::pin(async move {
@@ -254,24 +278,28 @@ impl LanguageServer for Proxy {
                     res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
                 });
             }
-            Some(b) => build = b,
+            Some(b) => req_build = b,
         };
 
-        let build_sources = build.sources();
+        let req_build_sources = req_build.sources();
         let project = self.state.get_project().clone();
+        let state = self.state.clone();
 
         Box::pin(async move {
             let doc_pos = &mut params.text_document_position_params;
-            let uri = &doc_pos.text_document.uri.clone();
+            let uri = &mut doc_pos.text_document.uri;
             let pos = &mut doc_pos.position;
-            let forward_pos = build.forward_src_position(pos, uri);
 
-            if forward_pos.is_none() {
+            // TODO: create util
+            let req_build_pos = req_build.forward_src_position(pos, uri);
+
+            if req_build_pos.is_none() {
                 let err = format!("Forward src position `{pos:?}` failed");
                 return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
             }
 
-            *pos = forward_pos.expect("is some");
+            *pos = req_build_pos.expect("is some");
+            *uri = req_build.emit_uri.clone();
 
             let res: ResReq<R::GotoDefinition> = service.definition(params).await;
             let res = res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e));
@@ -281,39 +309,44 @@ impl LanguageServer for Proxy {
             }
 
             let forward_location_links = |links: Vec<lsp::LocationLink>| -> Result<DefRes, _> {
-                let mut forward_links = vec![];
+                let mut forward_links = HashSet::with_capacity(links.len());
                 for mut link in links {
-                    if &link.target_uri == uri {
-                        let source_uri = forward_build_range(&mut link.target_range, &build)?;
-                        link.target_uri = source_uri;
+                    if link.target_uri.as_str().ends_with(DECL_FILE_EXT) {
+                        forward_links.insert(HashLocationLink(link));
+                        continue;
+                    }
 
-                        forward_build_range(&mut link.target_selection_range, &build)?;
+                    if link.target_uri.as_str().ends_with(BUILD_FILE) {
+                        continue;
+                    }
 
-                        if link.origin_selection_range.is_none() {
-                            forward_links.push(link);
+                    if let Some(ref any_build) = state.get_build_by_emit_uri(&link.target_uri) {
+                        let source_uri = forward_build_range(&mut link.target_range, any_build)?;
+                        let source = &source_uri.source_path().source(&project);
+
+                        if !req_build_sources.contains(source) {
                             continue;
                         }
 
-                        let origin = &mut link.origin_selection_range.expect("is some");
-                        if forward_build_range(origin, &build).is_err() {
-                            link.origin_selection_range = None;
+                        forward_build_range(&mut link.target_selection_range, any_build)?;
+
+                        link.target_uri = source_uri;
+                        link.origin_selection_range = None;
+                        forward_links.insert(HashLocationLink(link));
+                        continue;
+                    }
+
+                    if let Ok(link_source_path) = &link.target_uri.try_source_path() {
+                        let link_source = &link_source_path.source(&project);
+                        if !req_build_sources.contains(link_source) {
+                            continue;
                         }
 
-                        forward_links.push(link);
-                        continue;
-                    }
-
-                    let link_source = &link.target_uri.source_path().source(&project);
-                    let is_build_file = link.target_uri.source_path().ends_with(BUILD_FILE);
-
-                    if build_sources.contains(link_source) || is_build_file {
-                        continue;
-                    }
-
-                    if link_source.ends_with(DECL_FILE_EXT) {
-                        forward_links.push(link.to_owned());
+                        link.origin_selection_range = None;
+                        forward_links.insert(HashLocationLink(link));
                     }
                 }
+                let forward_links = forward_links.into_iter().map(|h| h.0).collect();
                 Ok(DefRes::Link(forward_links))
             };
 
@@ -401,4 +434,27 @@ fn strip_module_hash(mut hover: lsp::Hover) -> lsp::Hover {
     }
 
     hover
+}
+
+#[derive(Debug, Eq)]
+struct HashLocationLink(lsp::LocationLink);
+
+impl Hash for HashLocationLink {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        if let Some(origin_selection_range) = &self.0.origin_selection_range {
+            origin_selection_range.hash(state);
+        }
+        self.0.target_uri.canonicalize().hash(state);
+        self.0.target_range.hash(state);
+        self.0.target_selection_range.hash(state);
+    }
+}
+
+impl PartialEq for HashLocationLink {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.origin_selection_range == other.0.origin_selection_range
+            && self.0.target_selection_range == other.0.target_selection_range
+            && self.0.target_range == other.0.target_range
+            && self.0.target_uri.canonicalize() == other.0.target_uri.canonicalize()
+    }
 }

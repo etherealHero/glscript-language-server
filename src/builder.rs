@@ -1,6 +1,6 @@
-use sourcemap::{SourceMap, SourceMapBuilder, Token};
-use std::collections::HashSet;
+use std::collections::{HashSet, hash_map::DefaultHasher};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use pest::Parser;
@@ -10,6 +10,7 @@ use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
 
 use sha2::{Digest, Sha256};
+use sourcemap::{SourceMap, SourceMapBuilder, Token};
 
 use crate::state::{Source, SourcePath, State, ToSource, ToSourcePath};
 
@@ -28,7 +29,9 @@ struct GlScriptSubsetGrammar;
 
 #[derive(Clone)]
 pub struct Build {
-    pub text: String,
+    pub emit_text: String,
+    pub emit_uri: Uri,
+    pub emit_hash: u64,
     project: SourcePath,
     source_map: SourceMap,
 }
@@ -106,9 +109,18 @@ impl Build {
 
     pub fn build(state: &State, uri: &Uri) -> anyhow::Result<Self> {
         let mut smb = SourceMapBuilder::new(None);
-        let mut visited_sources = HashSet::<Source>::with_capacity(100);
+        let visited_sources = &mut HashSet::<Source>::with_capacity(100);
+        let emit_hasher = &mut DefaultHasher::new();
         let project = state.get_project();
-        let text = Self::emit(state, uri, project, &mut smb, &mut 0, &mut visited_sources)?;
+        let emit_text = Self::emit(
+            state,
+            uri,
+            project,
+            &mut smb,
+            &mut 0,
+            visited_sources,
+            emit_hasher,
+        )?;
         let source_map = smb.into_sourcemap();
 
         #[cfg(debug_assertions)]
@@ -117,14 +129,22 @@ impl Build {
             let _ = source_map.to_writer(&mut sm_json);
             let emitted_source_map = String::from_utf8(sm_json)?;
             let _ = fs::write(project.join(BUILD_SOURCEMAP_FILE), emitted_source_map);
-            let emitted_build = format!("{text}\n//# sourceMappingURL=/{BUILD_SOURCEMAP_FILE}");
-            let _ = fs::write(project.join(BUILD_FILE), emitted_build);
+            let build = format!("{emit_text}\n//# sourceMappingURL=/{BUILD_SOURCEMAP_FILE}");
+            let _ = fs::write(project.join(BUILD_FILE), build);
         }
 
+        let source_hash = Self::source_hash(&uri.source_path().source(project));
+        let source_path = project.join(format!("{source_hash}.js",));
+        let emit_uri = Uri::from_file_path(source_path).expect("valid build uri");
+
+        source_hash.hash(emit_hasher);
+
         let b = Self {
-            text,
-            source_map,
+            emit_uri,
+            emit_text,
+            emit_hash: emit_hasher.finish(),
             project: project.to_owned(),
+            source_map,
         };
 
         Ok(b)
@@ -132,6 +152,7 @@ impl Build {
 }
 
 impl Build {
+    // TODO: rewrite with EmitConfig
     fn emit(
         state: &State,
         uri: &Uri,
@@ -139,13 +160,19 @@ impl Build {
         smb: &mut SourceMapBuilder,
         dst_line: &mut u32,
         visited: &mut HashSet<String>,
+        hasher: &mut impl Hasher,
     ) -> anyhow::Result<String> {
         let path = &uri.try_source_path()?;
         let source = &path.source(project);
         match visited.contains(source) {
-            true => return Ok("".into()),
+            true => return Ok("".into()), // must be empty for emit global doc
             false => visited.insert(source.clone()),
         };
+
+        let global_uri = &state.get_global_doc(); // TODO: create once before emit loop
+        let global_text = Self::emit(&state, global_uri, project, smb, dst_line, visited, hasher)
+            // TODO: check invalid global doc
+            .unwrap_or("/* failed to emit global document */".to_owned());
 
         let raw_text = if let Some(text) = state.get_doc(uri) {
             text
@@ -157,16 +184,23 @@ impl Build {
 
         assert!(!raw_text.contains("\r\n"));
 
+        // TODO: ? append context prefix with root entry uri
+        // if definition failed with other builds
         let ident = Self::source_hash(&source);
-        let module_decl = format!("{DECL_PREFIX} {{'{source}'}} {MODULE_PREFIX}{ident} */\n");
+        let prepend_module = format!(
+            "{}{DECL_PREFIX} {{'{source}'}} {MODULE_PREFIX}{ident} */{{}};\n",
+            global_text,
+        );
+
+        ident.hash(hasher);
         smb.add(*dst_line, 0, 0, 0, Some(source), None, false);
-        *dst_line += 1;
+        *dst_line += 1; // prepend_module end breakline
 
         let emitted_source_file = GlScriptSubsetGrammar::parse(self::Rule::SourceFile, &raw_text)?
             .next()
             .ok_or(anyhow::Error::msg("NodeNotFound"))?
             .into_inner()
-            .fold(module_decl, |acc, r| match r.as_rule() {
+            .fold(prepend_module, |acc, r| match r.as_rule() {
                 self::Rule::IncludeToken => acc,
                 self::Rule::IncludePath => {
                     let sp = r.as_span();
@@ -179,11 +213,12 @@ impl Build {
                     let dep_uri = Uri::from_file_path(&dep_path).expect("valid dep_path");
                     let dep_source = match dep_uri.try_source_path() {
                         Ok(dep_source_path) => dep_source_path.source(project),
-                        _ => "".to_owned(),
+                        _ => dep_rpath.to_string(),
                     };
                     let dep_ident = Self::source_hash(&dep_source);
+                    format!("{dep_ident}{line}{col}").hash(hasher);
 
-                    let link_ref = format!("\n{LINK_PREFIX}{MODULE_PREFIX}{dep_ident}}} */\n");
+                    let link_ref = format!("\n{LINK_PREFIX}{MODULE_PREFIX}{dep_ident}}} */{{}};\n");
                     let prefix = LINK_PREFIX.len() as u32;
                     let suffix = prefix + MODULE_PREFIX.len() as u32 + dep_ident.len() as u32;
                     let acc_buf = acc + link_ref.as_str() + "\n";
@@ -193,7 +228,8 @@ impl Build {
                     smb.add(*dst_line, suffix, 0, 0, None, None, false);
                     *dst_line += 2;
 
-                    let dep_build = Self::emit(&state, &dep_uri, project, smb, dst_line, visited);
+                    let dep_build =
+                        Self::emit(&state, &dep_uri, project, smb, dst_line, visited, hasher);
                     let dep_text = match dep_build {
                         Ok(emitted_dep_text) => {
                             let blk = " ".repeat(col as usize + path_lit.len());

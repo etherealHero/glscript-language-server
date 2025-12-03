@@ -8,7 +8,7 @@ Untracked =  { (!(_tracked | PlaceholderCloseBracket) ~ ANY)+ | (!(_tracked) ~ A
 // .                         ^fix nested stmt
 
 LineTerminator    =  { "\n" | "\r\n" | "\r" }
-WhiteSpace        =  { " " | "\t" }
+WhiteSpace        =  { (" " | "\t")+ }
 _maybeEscapedChar = _{ ("\\" ~ ANY) | (!"\\" ~ ANY) }
 
 // Include statement
