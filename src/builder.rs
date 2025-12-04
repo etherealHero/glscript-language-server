@@ -170,9 +170,7 @@ impl Build {
         };
 
         let global_uri = &state.get_global_doc(); // TODO: create once before emit loop
-        let global_text = Self::emit(&state, global_uri, project, smb, dst_line, visited, hasher)
-            // TODO: check invalid global doc
-            .unwrap_or("/* failed to emit global document */".to_owned());
+        let global_text = Self::emit(&state, global_uri, project, smb, dst_line, visited, hasher);
 
         let raw_text = if let Some(text) = state.get_doc(uri) {
             text
@@ -184,12 +182,11 @@ impl Build {
 
         assert!(!raw_text.contains("\r\n"));
 
-        // TODO: ? append context prefix with root entry uri
-        // if definition failed with other builds
+        // TODO: ? append context prefix with root entry uri if definition failed with other builds
         let ident = Self::source_hash(&source);
         let prepend_module = format!(
             "{}{DECL_PREFIX} {{'{source}'}} {MODULE_PREFIX}{ident} */{{}};\n",
-            global_text,
+            global_text.unwrap_or_default(),
         );
 
         ident.hash(hasher);

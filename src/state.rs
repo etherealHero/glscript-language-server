@@ -14,7 +14,7 @@ pub struct BuildWithVersion {
 #[derive(Default)]
 pub struct State {
     project_path: Arc<OnceLock<SourcePath>>,
-    global_document: Arc<OnceLock<SourcePath>>,
+    global_document: Arc<OnceLock<Uri>>,
     documents: Arc<DashMap<SourcePath, String>>,
     builds: Arc<DashMap<SourcePath, BuildWithVersion>>,
 }
@@ -138,17 +138,16 @@ impl State {
         self.project_path.get().expect("project installed")
     }
 
-    pub fn set_global_doc(&self, source_uri: &Uri) {
+    pub fn set_global_doc(&self, source_uri: Uri) {
         self.global_document
-            .set(source_uri.source_path())
+            .set(source_uri)
             .expect("global_document set once");
     }
 
     pub fn get_global_doc(&self) -> Uri {
-        let path = self
-            .global_document
+        self.global_document
             .get()
-            .expect("global_document installed");
-        Uri::from_file_path(path).expect("global_document valid")
+            .expect("global_document installed")
+            .to_owned()
     }
 }

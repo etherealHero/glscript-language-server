@@ -1,10 +1,10 @@
 use std::ops::ControlFlow;
 use tokio::time::{Duration, timeout};
 
-use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::lsp_types::{notification::Notification, request::Request};
-use async_lsp::{ErrorCode, LanguageServer, ResponseError};
+use async_lsp::{ErrorCode, ResponseError};
+use async_lsp::{LanguageClient, LanguageServer, lsp_types as lsp};
 
 use crate::builder::{BUILD_FILE, Build, MODULE_PREFIX};
 use crate::proxy::{DECL_FILE_EXT, JS_LANG_ID, Proxy, ResFut, ResReq, ResReqProxy};
@@ -34,7 +34,23 @@ impl LanguageServer for Proxy {
             if let Some(doc) = global_script {
                 let global_doc_uri = Uri::from_file_path(&project_uri.source_path().join(doc))
                     .expect("valid global doc uri");
-                self.state.set_global_doc(&global_doc_uri);
+                let _ = global_doc_uri.try_source_path().map_err(|err| {
+                    // TODO: set glscript as constant script
+                    // where users add some deps
+                    let message = format!(
+                        "{}: {} ({}) {} {err}. {}",
+                        "GLScript Language Server",
+                        "step to setup global script",
+                        global_doc_uri.path(),
+                        "from config options failed:",
+                        "Try to reconfigure options, then restart language server"
+                    );
+                    let _ = self.client().show_message(lsp::ShowMessageParams {
+                        typ: lsp::MessageType::WARNING,
+                        message,
+                    });
+                });
+                self.state.set_global_doc(global_doc_uri);
             }
         }
 
