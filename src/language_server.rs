@@ -268,6 +268,7 @@ impl LanguageServer for Proxy {
                 }
             }
 
+            // TODO: skip awaiting decl on empty hover
             let decl: ResReqProxy<R::GotoDefinition> =
                 timeout(Duration::from_millis(200), decl_req)
                     .await
