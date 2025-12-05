@@ -71,7 +71,7 @@ impl ToSource for SourcePath {
 
 impl State {
     pub fn set_build(&self, source_uri: &Uri) -> BuildWithVersion {
-        let new_build = Build::build(&self, source_uri).expect("build success");
+        let new_build = Build::new(&self, source_uri).expect("build success");
         let path = &source_uri.source_path();
 
         match self.builds.get_mut(path) {

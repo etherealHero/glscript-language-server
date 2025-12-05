@@ -17,7 +17,7 @@ use crate::state::{Source, SourcePath, State, ToSource, ToSourcePath};
 pub const BUILD_FILE: &'static str = "build.js.emitted";
 
 #[cfg(debug_assertions)]
-const BUILD_SOURCEMAP_FILE: &'static str = "build.js.emitted.map";
+pub const BUILD_SOURCEMAP_FILE: &'static str = "build.js.emitted.map";
 
 const DECL_PREFIX: &'static str = "/** @typedef";
 const LINK_PREFIX: &'static str = "/** {@link ";
@@ -107,7 +107,7 @@ impl Build {
         }
     }
 
-    pub fn build(state: &State, uri: &Uri) -> anyhow::Result<Self> {
+    pub fn new(state: &State, uri: &Uri) -> anyhow::Result<Self> {
         let mut smb = SourceMapBuilder::new(None);
         let visited_sources = &mut HashSet::<Source>::with_capacity(100);
         let emit_hasher = &mut DefaultHasher::new();
@@ -258,7 +258,7 @@ impl Build {
 
     fn resolve_path(module_path: &Path, project_root: &Path, include_literal: &str) -> PathBuf {
         #[inline]
-        pub fn is_relative_path(path: &str) -> bool {
+        fn is_relative_path(path: &str) -> bool {
             path.starts_with("./")
                 || path.starts_with(".\\")
                 || path.starts_with("../")
@@ -266,7 +266,7 @@ impl Build {
         }
 
         #[inline]
-        pub fn normalize_path(path: &Path) -> PathBuf {
+        fn normalize_path(path: &Path) -> PathBuf {
             let mut buf = PathBuf::new();
             for component in path.components() {
                 match component {

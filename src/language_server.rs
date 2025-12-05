@@ -6,7 +6,7 @@ use async_lsp::lsp_types::{notification::Notification, request::Request};
 use async_lsp::{ErrorCode, ResponseError};
 use async_lsp::{LanguageClient, LanguageServer, lsp_types as lsp};
 
-use crate::builder::{BUILD_FILE, Build, MODULE_PREFIX};
+use crate::builder::{BUILD_FILE, BUILD_SOURCEMAP_FILE, Build, MODULE_PREFIX};
 use crate::proxy::{DECL_FILE_EXT, JS_LANG_ID, Proxy, ResFut, ResReq, ResReqProxy};
 use crate::state::{Canonicalize, ToSource, ToSourcePath};
 
@@ -89,9 +89,10 @@ impl LanguageServer for Proxy {
                     build_with_version.build.emit_text,
                 ),
             });
+        } else {
+            let _ = self.server().did_open(params);
         }
 
-        let _ = self.server().did_open(params);
         ControlFlow::Continue(())
     }
 
@@ -191,22 +192,25 @@ impl LanguageServer for Proxy {
             let _ = self.server().did_change(forward_params);
         }
 
-        let _ = self.server().did_change(params);
         ControlFlow::Continue(())
     }
 
     fn did_save(&mut self, params: lsp::DidSaveTextDocumentParams) -> Self::NotifyResult {
-        let _ = self.server().did_save(params);
+        if self.state.get_build(&params.text_document.uri).is_none() {
+            let _ = self.server().did_save(params);
+        }
         ControlFlow::Continue(())
     }
 
     fn did_close(&mut self, params: lsp::DidCloseTextDocumentParams) -> Self::NotifyResult {
-        self.state.get_build(&params.text_document.uri).map(|b| {
-            let _ = self.server().did_close(lsp::DidCloseTextDocumentParams {
-                text_document: lsp::TextDocumentIdentifier::new(b.emit_uri),
-            });
-        });
-        let _ = self.server().did_close(params);
+        match self.state.get_build(&params.text_document.uri) {
+            Some(b) => {
+                let _ = self.server().did_close(lsp::DidCloseTextDocumentParams {
+                    text_document: lsp::TextDocumentIdentifier::new(b.emit_uri),
+                });
+            }
+            None => self.server().did_close(params).expect("did close"),
+        }
         ControlFlow::Continue(())
     }
 
@@ -226,6 +230,7 @@ impl LanguageServer for Proxy {
             Some(b) => build = b,
         };
 
+        // TODO: send cancel req on timeout
         let decl_req = self.definition(lsp::GotoDefinitionParams {
             text_document_position_params: lsp::TextDocumentPositionParams::new(
                 lsp::TextDocumentIdentifier::new(uri.clone()),
@@ -325,7 +330,7 @@ impl LanguageServer for Proxy {
                 return res;
             }
 
-            let forward_location_links = |links: Vec<lsp::LocationLink>| -> Result<DefRes, _> {
+            let forward_location_links = |links: Vec<lsp::LocationLink>| -> Result<_, _> {
                 let mut forward_links = HashSet::with_capacity(links.len());
                 for mut link in links {
                     if link.target_uri.as_str().ends_with(DECL_FILE_EXT) {
@@ -333,6 +338,8 @@ impl LanguageServer for Proxy {
                         continue;
                     }
 
+                    // TODO: forward build file ?
+                    // emit build file with global doc constant to debug anywhere ?
                     if link.target_uri.as_str().ends_with(BUILD_FILE) {
                         continue;
                     }
@@ -391,6 +398,31 @@ impl LanguageServer for Proxy {
 
             Ok(Some(forward_res))
         })
+    }
+
+    fn did_change_watched_files(
+        &mut self,
+        mut params: lsp::DidChangeWatchedFilesParams,
+    ) -> Self::NotifyResult {
+        let mut forward_changes = vec![];
+        for channge in params.changes {
+            let is_build_file = !channge.uri.as_str().ends_with(BUILD_FILE);
+            let is_sourcemap_file = !channge.uri.as_str().ends_with(BUILD_SOURCEMAP_FILE);
+            let is_build_dep = self.state.get_build(&channge.uri).is_some();
+
+            if !is_build_file && !is_sourcemap_file && !is_build_dep {
+                forward_changes.push(channge);
+            }
+        }
+
+        if forward_changes.is_empty() {
+            return ControlFlow::Continue(());
+        }
+
+        params.changes = forward_changes;
+
+        let _ = self.server().did_change_watched_files(params);
+        ControlFlow::Continue(())
     }
 }
 

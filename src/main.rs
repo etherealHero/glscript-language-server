@@ -35,6 +35,8 @@ async fn main() {
         .spawn()
         .expect("failed to spawn");
 
+    // tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
     let ref_server = Arc::new(OnceLock::new());
     let ref_client = Arc::new(OnceLock::new());
 
@@ -58,5 +60,9 @@ async fn main() {
         ret = main1 => ret,
         ret = main2 => ret,
     };
-    ret.expect("join error").expect("valid proxy lifecycle");
+
+    ret.map_err(|e| format!("setup proxy transport error: {e}"))
+        .expect("setup proxy transport")
+        .map_err(|e| format!("proxy lifecycle error: {e}"))
+        .expect("proxy lifecycle");
 }

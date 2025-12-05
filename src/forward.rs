@@ -72,7 +72,10 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         match this.fut.poll(cx) {
-            Poll::Ready(Ok(result)) => Poll::Ready(Ok(result)),
+            Poll::Ready(Ok(result_req)) => {
+                // dbg!(&result_req);
+                Poll::Ready(Ok(result_req))
+            }
             Poll::Ready(Err(unimpl_req)) if unimpl_req.code == ErrorCode::METHOD_NOT_FOUND => {
                 // dbg!(unimpl_req);
                 Poll::Ready(Ok(serde_json::Value::Null))
