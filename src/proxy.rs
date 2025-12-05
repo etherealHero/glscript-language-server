@@ -4,6 +4,7 @@ use tower::ServiceBuilder;
 
 use async_lsp::lsp_types::request::Request;
 use async_lsp::router::Router;
+use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, ResponseError, ServerSocket};
 
 use crate::forward::{ForwardingLayer, TService};
@@ -11,6 +12,7 @@ use crate::state::State;
 
 pub const JS_LANG_ID: &'static str = "javascript";
 pub const DECL_FILE_EXT: &'static str = ".d.ts";
+pub const PROXY_WORKSPACE: &'static str = "./.local/gls-proxy-workspace";
 
 pub type ResFut<R> = BoxFuture<'static, Result<<R as Request>::Result, ResponseError>>;
 pub type ResReq<R> = Result<<R as Request>::Result, async_lsp::Error>;
@@ -43,8 +45,14 @@ impl Proxy {
         };
         let sr = Router::from_language_server(proxy.clone());
         let cr = Router::from_language_client(proxy);
-        let server = ServiceBuilder::new().layer(ForwardingLayer).service(sr);
-        let client = ServiceBuilder::new().layer(ForwardingLayer).service(cr);
+        let server = ServiceBuilder::new()
+            .layer(ForwardingLayer)
+            .layer(TracingLayer::default())
+            .service(sr);
+        let client = ServiceBuilder::new()
+            .layer(ForwardingLayer)
+            .layer(TracingLayer::default())
+            .service(cr);
 
         (server, client)
     }

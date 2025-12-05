@@ -1,3 +1,4 @@
+use std::fs;
 use std::ops::ControlFlow;
 use tokio::time::{Duration, timeout};
 
@@ -6,9 +7,11 @@ use async_lsp::lsp_types::{notification::Notification, request::Request};
 use async_lsp::{ErrorCode, ResponseError};
 use async_lsp::{LanguageClient, LanguageServer, lsp_types as lsp};
 
-use crate::builder::{BUILD_FILE, BUILD_SOURCEMAP_FILE, Build, MODULE_PREFIX};
-use crate::proxy::{DECL_FILE_EXT, JS_LANG_ID, Proxy, ResFut, ResReq, ResReqProxy};
+use crate::builder::{BUILD_FILE, Build, MODULE_PREFIX};
 use crate::state::{Canonicalize, ToSource, ToSourcePath};
+
+use crate::proxy::{DECL_FILE_EXT, JS_LANG_ID, PROXY_WORKSPACE};
+use crate::proxy::{Proxy, ResFut, ResReq, ResReqProxy};
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -17,7 +20,16 @@ impl LanguageServer for Proxy {
     type Error = ResponseError;
     type NotifyResult = ControlFlow<async_lsp::Result<()>>;
 
-    fn initialize(&mut self, params: lsp::InitializeParams) -> ResFut<R::Initialize> {
+    fn initialize(&mut self, mut params: lsp::InitializeParams) -> ResFut<R::Initialize> {
+        const GLSCRIPT_INDEXING_TOKEN: &'static str = "glscript_indexing";
+
+        let mut client = self.client();
+        // dbg!(&params);
+
+        // FIXME: if node_modules not installed show user error
+
+        // FIXME: if client not has workspace_folders show client Error message for open Project Folder
+        // TODO: if workspace_folders.len() > 2 show error for unsupported
         if let Some([root_ws, ..]) = params.workspace_folders.as_deref() {
             let project_uri = &root_ws.uri;
             self.state.set_project(project_uri);
@@ -39,25 +51,78 @@ impl LanguageServer for Proxy {
                     // where users add some deps
                     let message = format!(
                         "{}: {} ({}) {} {err}. {}",
-                        "GLScript Language Server",
+                        "glscript-language-server",
                         "step to setup global script",
                         global_doc_uri.path(),
                         "from config options failed:",
                         "Try to reconfigure options, then restart language server"
                     );
-                    let _ = self.client().show_message(lsp::ShowMessageParams {
+                    let _ = client.show_message(lsp::ShowMessageParams {
                         typ: lsp::MessageType::WARNING,
                         message,
                     });
                 });
-                self.state.set_global_doc(global_doc_uri);
+
+                let _ = client.progress(lsp::ProgressParams {
+                    token: lsp::NumberOrString::String(GLSCRIPT_INDEXING_TOKEN.into()),
+                    value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::Begin(
+                        lsp::WorkDoneProgressBegin {
+                            title: "Indexing".into(),
+                            message: Some("build global document...".into()),
+                            ..Default::default()
+                        },
+                    )),
+                });
+
+                self.state.set_global_doc(global_doc_uri.clone());
+                self.state.set_build(&global_doc_uri);
             }
         }
 
         let mut service = self.server();
         Box::pin(async move {
-            let res = service.initialize(params).await;
-            res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+            let mut proxy_workspace_dir_created = false;
+
+            if let Some(wf) = &mut params.workspace_folders {
+                for w in wf {
+                    let ws_dir = &w.uri.to_file_path().expect("valid path of workspace uri");
+                    let proxy_ws_dir = &mut dbg!(ws_dir).clone().join(PROXY_WORKSPACE);
+
+                    if !proxy_workspace_dir_created {
+                        fs::create_dir_all(dbg!(&proxy_ws_dir))
+                            .expect("create proxy workspace folder");
+
+                        *proxy_ws_dir = proxy_ws_dir.canonicalize().expect("proxy ws dir");
+
+                        fs::copy(
+                            ws_dir.join("jsconfig.json"),
+                            proxy_ws_dir.join("jsconfig.json"),
+                        )
+                        .map_err(|e| format!("jsconfig copy into proxy workspace failed: {e}"))
+                        .expect("jsconfig copied into proxy workspace");
+
+                        proxy_workspace_dir_created = true;
+                    }
+
+                    w.uri = Uri::from_directory_path(proxy_ws_dir).expect("valid workspace folder")
+                }
+            }
+
+            #[allow(deprecated)]
+            {
+                params.root_path = None;
+                params.root_uri = None;
+            }
+
+            // let initialize_res = service.initialize(dbg!(params)).await;
+            // dbg!(initialize_res).map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+
+            let _ = client.work_done_progress_create(lsp::WorkDoneProgressCreateParams {
+                token: lsp::NumberOrString::String(GLSCRIPT_INDEXING_TOKEN.into()),
+            });
+
+            let initialize_res = service.initialize(params).await;
+            initialize_res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
         })
     }
 
@@ -80,7 +145,11 @@ impl LanguageServer for Proxy {
         let doc = &params.text_document;
         if doc.language_id == JS_LANG_ID && !doc.uri.source_path().ends_with(BUILD_FILE) {
             self.state.set_doc(&doc.uri, &doc.text);
+            let source = &doc.uri.source_path().source(self.state.get_project());
+            tracing::info!("start build on did open {source}",);
             let build_with_version = self.state.set_build(&doc.uri);
+            tracing::info!("builded on did open {source}",);
+            tracing::info!("send notify on did open {source}",);
             let _ = self.server().did_open(lsp::DidOpenTextDocumentParams {
                 text_document: lsp::TextDocumentItem::new(
                     build_with_version.build.emit_uri,
@@ -163,7 +232,7 @@ impl LanguageServer for Proxy {
                         range_length: change.range_length,
                         text: change.text.replace("\r\n", "\n"),
                     }),
-                    None => panic!("forward_src_range failed on did_change"),
+                    None => sources_changed = true,
                 };
             }
 
@@ -189,6 +258,7 @@ impl LanguageServer for Proxy {
                 },
             };
 
+            // FIXME: too long on many buffers, change to dirty builds & update stack on idle
             let _ = self.server().did_change(forward_params);
         }
 
@@ -371,10 +441,11 @@ impl LanguageServer for Proxy {
                     }
                 }
                 let forward_links = forward_links.into_iter().map(|h| h.0).collect();
-                Ok(DefRes::Link(forward_links))
+                Ok(DefRes::Link(dbg!(forward_links)))
             };
 
             let ts_definition_response = res?.expect("is some");
+            dbg!(&ts_definition_response);
             let forward_res: DefRes = match ts_definition_response {
                 DefRes::Link(location_links) => forward_location_links(location_links)?,
                 DefRes::Scalar(location) => forward_location_links(vec![lsp::LocationLink {
@@ -407,12 +478,25 @@ impl LanguageServer for Proxy {
         let mut forward_changes = vec![];
         for channge in params.changes {
             let is_build_file = !channge.uri.as_str().ends_with(BUILD_FILE);
-            let is_sourcemap_file = !channge.uri.as_str().ends_with(BUILD_SOURCEMAP_FILE);
             let is_build_dep = self.state.get_build(&channge.uri).is_some();
+            let is_sourcemap_file;
 
-            if !is_build_file && !is_sourcemap_file && !is_build_dep {
-                forward_changes.push(channge);
+            #[cfg(debug_assertions)]
+            {
+                use crate::builder::BUILD_SOURCEMAP_FILE;
+                is_sourcemap_file = !channge.uri.as_str().ends_with(BUILD_SOURCEMAP_FILE);
             }
+
+            #[cfg(not(debug_assertions))]
+            {
+                is_sourcemap_file = false;
+            }
+
+            if is_build_file || is_sourcemap_file || is_build_dep {
+                continue;
+            }
+
+            forward_changes.push(channge);
         }
 
         if forward_changes.is_empty() {

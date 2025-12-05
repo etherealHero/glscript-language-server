@@ -73,14 +73,17 @@ where
         let this = self.project();
         match this.fut.poll(cx) {
             Poll::Ready(Ok(result_req)) => {
-                // dbg!(&result_req);
+                // dbg!((this.method, &result_req));
                 Poll::Ready(Ok(result_req))
             }
             Poll::Ready(Err(unimpl_req)) if unimpl_req.code == ErrorCode::METHOD_NOT_FOUND => {
-                // dbg!(unimpl_req);
+                // dbg!((this.method, unimpl_req));
                 Poll::Ready(Ok(serde_json::Value::Null))
             }
-            Poll::Ready(Err(fail_req)) => Poll::Ready(Err(dbg!(fail_req))),
+            Poll::Ready(Err(fail_req)) => {
+                dbg!((this.method, &fail_req));
+                Poll::Ready(Err(fail_req))
+            }
             Poll::Pending => Poll::Pending,
         }
     }

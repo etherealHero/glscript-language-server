@@ -1,6 +1,8 @@
 mod forward;
 
 mod builder;
+mod parser;
+
 mod proxy;
 mod state;
 
@@ -19,6 +21,7 @@ async fn main() {
         .with_max_level(tracing::Level::INFO)
         .with_ansi(false)
         .with_writer(std::io::stderr)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .init();
 
     let server = &std::env::args()

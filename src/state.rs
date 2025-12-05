@@ -1,9 +1,12 @@
-use async_lsp::lsp_types::Url as Uri;
-use dashmap::DashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use crate::builder::Build;
+use crate::parser::{Token, parse};
+
+use async_lsp::lsp_types::Url as Uri;
+use dashmap::DashMap;
 
 #[derive(Clone)]
 pub struct BuildWithVersion {
@@ -11,11 +14,16 @@ pub struct BuildWithVersion {
     pub version: i32,
 }
 
+pub struct Document {
+    pub text: String,
+    pub tokens: Vec<Token>,
+}
+
 #[derive(Default)]
 pub struct State {
     project_path: Arc<OnceLock<SourcePath>>,
     global_document: Arc<OnceLock<Uri>>,
-    documents: Arc<DashMap<SourcePath, String>>,
+    documents: Arc<DashMap<SourcePath, Document>>,
     builds: Arc<DashMap<SourcePath, BuildWithVersion>>,
 }
 
@@ -120,12 +128,28 @@ impl State {
 
     pub fn set_doc(&self, source_uri: &Uri, text: &String) {
         let text = text.replace("\r\n", "\n").replace("\r", "");
-        self.documents.insert(source_uri.source_path(), text);
+        let tokens = parse(&text);
+
+        self.documents
+            .insert(source_uri.source_path(), Document { tokens, text });
     }
 
     pub fn get_doc(&self, source_uri: &Uri) -> Option<String> {
         let path = &source_uri.source_path();
-        self.documents.get(path).map(|guard| guard.clone())
+        self.documents.get(path).map(|guard| guard.text.clone())
+    }
+
+    // TODO: change source_uri to struct ProjectUri which must be valid
+    pub fn get_doc_tokens(&self, source_uri: &Uri) -> Vec<Token> {
+        let path = &source_uri.source_path();
+        match self.documents.get(path).map(|guard| guard.tokens.clone()) {
+            Some(tokens) => tokens,
+            None => {
+                let text = &fs::read_to_string(path).expect("content of real source uri");
+                self.set_doc(source_uri, text);
+                self.get_doc_tokens(source_uri)
+            }
+        }
     }
 
     pub fn set_project(&self, source_uri: &Uri) {
@@ -144,6 +168,7 @@ impl State {
             .expect("global_document set once");
     }
 
+    // FIXME: if global doc invalid or not installed ? change with constant global.js file
     pub fn get_global_doc(&self) -> Uri {
         self.global_document
             .get()

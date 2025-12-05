@@ -9,6 +9,7 @@ tokio = { version = "1.41.1", features = [
   "io-std",
   "macros",
   "rt-multi-thread",
+  "time",
 ] }
 tokio-util = { version = "0.7.12", features = ["compat"] }
 tracing = "0.1.40"
@@ -24,18 +25,17 @@ futures = { version = "0.3.28", default-features = false, features = [
 async-process = "2"
 serde_json = "1.0.95"
 
-dashmap = "6.1.0"
-
-# parser
 pest = "2.8.1"
 pest_derive = "2.8.1"
 
-# builder
 sourcemap = "9.2.2"
 sha2 = "0.10.9"
 hex = "0.4.3"
 
 anyhow = "1.0.100"
+dashmap = "6.1.0"
+regex = "1.12.2"
+dunce = "1.0.5"
 
 [dev-dependencies]
 tokio = { version = "1.41.1", features = [
@@ -47,3 +47,8 @@ tokio = { version = "1.41.1", features = [
   "signal",
   "io-util",
 ] }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
