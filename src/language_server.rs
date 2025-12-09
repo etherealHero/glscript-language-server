@@ -24,8 +24,6 @@ impl LanguageServer for Proxy {
         const GLSCRIPT_INDEXING_TOKEN: &'static str = "glscript_indexing";
 
         let mut client = self.client();
-        // dbg!(&params);
-
         // FIXME: if node_modules not installed show user error
 
         // FIXME: if client not has workspace_folders show client Error message for open Project Folder
@@ -43,39 +41,44 @@ impl LanguageServer for Proxy {
                 .and_then(|p| p.get("globalScript"))
                 .and_then(|v| v.as_str());
 
-            if let Some(doc) = global_script {
-                let global_doc_uri = Uri::from_file_path(&project_uri.source_path().join(doc))
-                    .expect("valid global doc uri");
-                let _ = global_doc_uri.try_source_path().map_err(|err| {
-                    // TODO: set glscript as constant script
-                    // where users add some deps
-                    let message = format!(
-                        "{}: {} ({}) {} {err}. {}",
-                        "glscript-language-server",
-                        "step to setup global script",
-                        global_doc_uri.path(),
-                        "from config options failed:",
-                        "Try to reconfigure options, then restart language server"
-                    );
-                    let _ = client.show_message(lsp::ShowMessageParams {
-                        typ: lsp::MessageType::WARNING,
-                        message,
+            match global_script {
+                Some(doc) if !doc.is_empty() && project_uri.source_path().join(doc).is_file() => {
+                    let path = &project_uri.source_path().join(doc);
+                    let global_doc_uri = Uri::from_file_path(path).expect("valid global doc uri");
+                    let global_doc_source_path = self.state.uri_to_source_path(&global_doc_uri);
+                    let _ = global_doc_source_path.map_err(|err| {
+                        // TODO: set glscript as constant script
+                        // where users add some deps
+                        let message = format!(
+                            "{}: {} ({}) {} {err}. {}",
+                            "glscript-language-server",
+                            "step to setup global script",
+                            global_doc_uri.path(),
+                            "from config options failed:",
+                            "Try to reconfigure options, then restart language server"
+                        );
+                        let _ = client.show_message(lsp::ShowMessageParams {
+                            typ: lsp::MessageType::WARNING,
+                            message,
+                        });
                     });
-                });
 
-                let _ = client.progress(lsp::ProgressParams {
-                    token: lsp::NumberOrString::String(GLSCRIPT_INDEXING_TOKEN.into()),
-                    value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::Begin(
-                        lsp::WorkDoneProgressBegin {
-                            title: "Indexing".into(),
-                            message: Some("build global document...".into()),
-                            ..Default::default()
-                        },
-                    )),
-                });
+                    // FIXME: progress not show
+                    let _ = client.progress(lsp::ProgressParams {
+                        token: lsp::NumberOrString::String(GLSCRIPT_INDEXING_TOKEN.into()),
+                        value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::Begin(
+                            lsp::WorkDoneProgressBegin {
+                                title: "Indexing".into(),
+                                message: Some("build global document...".into()),
+                                ..Default::default()
+                            },
+                        )),
+                    });
 
-                self.state.set_global_doc(global_doc_uri.clone());
-                self.state.set_build(&global_doc_uri);
+                    self.state.set_global_doc(global_doc_uri.clone());
+                    self.state.set_build(&global_doc_uri);
+                }
+                _ => {}
             }
         }
 
@@ -86,11 +89,10 @@ impl LanguageServer for Proxy {
             if let Some(wf) = &mut params.workspace_folders {
                 for w in wf {
                     let ws_dir = &w.uri.to_file_path().expect("valid path of workspace uri");
-                    let proxy_ws_dir = &mut dbg!(ws_dir).clone().join(PROXY_WORKSPACE);
+                    let proxy_ws_dir = &mut ws_dir.clone().join(PROXY_WORKSPACE);
 
                     if !proxy_workspace_dir_created {
-                        fs::create_dir_all(dbg!(&proxy_ws_dir))
-                            .expect("create proxy workspace folder");
+                        fs::create_dir_all(&proxy_ws_dir).expect("create proxy workspace folder");
 
                         *proxy_ws_dir = proxy_ws_dir.canonicalize().expect("proxy ws dir");
 
@@ -113,9 +115,6 @@ impl LanguageServer for Proxy {
                 params.root_path = None;
                 params.root_uri = None;
             }
-
-            // let initialize_res = service.initialize(dbg!(params)).await;
-            // dbg!(initialize_res).map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
 
             let _ = client.work_done_progress_create(lsp::WorkDoneProgressCreateParams {
                 token: lsp::NumberOrString::String(GLSCRIPT_INDEXING_TOKEN.into()),
@@ -145,11 +144,7 @@ impl LanguageServer for Proxy {
         let doc = &params.text_document;
         if doc.language_id == JS_LANG_ID && !doc.uri.source_path().ends_with(BUILD_FILE) {
             self.state.set_doc(&doc.uri, &doc.text);
-            let source = &doc.uri.source_path().source(self.state.get_project());
-            tracing::info!("start build on did open {source}",);
             let build_with_version = self.state.set_build(&doc.uri);
-            tracing::info!("builded on did open {source}",);
-            tracing::info!("send notify on did open {source}",);
             let _ = self.server().did_open(lsp::DidOpenTextDocumentParams {
                 text_document: lsp::TextDocumentItem::new(
                     build_with_version.build.emit_uri,
@@ -165,6 +160,7 @@ impl LanguageServer for Proxy {
         ControlFlow::Continue(())
     }
 
+    // #[tracing::instrument(skip(self, params))]
     fn did_change(&mut self, params: lsp::DidChangeTextDocumentParams) -> Self::NotifyResult {
         let uri = &params.text_document.uri;
 
@@ -174,22 +170,16 @@ impl LanguageServer for Proxy {
         }
 
         // 1. apply changes to raw document
-        if let Some(mut text) = self.state.get_doc(uri) {
+        if let Some(text) = self.state.get_doc(uri) {
             let changes = &params.content_changes;
+            let mut text = (*text).clone();
             if text.is_empty() {
                 text = changes.into_iter().fold("".into(), |mut acc: String, c| {
                     acc.push_str(&c.text.replace("\r\n", "\n"));
                     acc
                 });
             } else {
-                let mut changes = changes.to_vec();
-                changes.sort_by(|a, b| {
-                    let ra = a.range.expect("is some");
-                    let rb = b.range.expect("is some");
-                    (ra.start.line, ra.start.character).cmp(&(rb.start.line, rb.start.character))
-                });
-
-                for change in changes.into_iter().rev() {
+                for change in changes {
                     text.ends_with("\n").then(|| text.push_str("\n"));
                     let lsp::Range { start, end } = change.range.expect("is some");
                     let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
@@ -232,7 +222,7 @@ impl LanguageServer for Proxy {
                         range_length: change.range_length,
                         text: change.text.replace("\r\n", "\n"),
                     }),
-                    None => sources_changed = true,
+                    None => sources_changed = true, // FIXME: find exception cases
                 };
             }
 
@@ -259,6 +249,7 @@ impl LanguageServer for Proxy {
             };
 
             // FIXME: too long on many buffers, change to dirty builds & update stack on idle
+            // find lsp req or notify triggered on current client buffer for detect actual build
             let _ = self.server().did_change(forward_params);
         }
 
@@ -343,7 +334,7 @@ impl LanguageServer for Proxy {
                 }
             }
 
-            // TODO: skip awaiting decl on empty hover
+            // TODO: skip awaiting decl on empty hover. ^^^ Check hover.is_none()
             let decl: ResReqProxy<R::GotoDefinition> =
                 timeout(Duration::from_millis(200), decl_req)
                     .await
@@ -430,7 +421,8 @@ impl LanguageServer for Proxy {
                         continue;
                     }
 
-                    if let Ok(link_source_path) = &link.target_uri.try_source_path() {
+                    let target_uri_source_path = state.uri_to_source_path(&link.target_uri);
+                    if let Ok(link_source_path) = target_uri_source_path {
                         let link_source = &link_source_path.source(&project);
                         if !req_build_sources.contains(link_source) {
                             continue;
@@ -441,11 +433,10 @@ impl LanguageServer for Proxy {
                     }
                 }
                 let forward_links = forward_links.into_iter().map(|h| h.0).collect();
-                Ok(DefRes::Link(dbg!(forward_links)))
+                Ok(DefRes::Link(forward_links))
             };
 
             let ts_definition_response = res?.expect("is some");
-            dbg!(&ts_definition_response);
             let forward_res: DefRes = match ts_definition_response {
                 DefRes::Link(location_links) => forward_location_links(location_links)?,
                 DefRes::Scalar(location) => forward_location_links(vec![lsp::LocationLink {

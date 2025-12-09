@@ -5,18 +5,9 @@ use pest_derive::Parser;
 #[grammar = "./glscript_subset_grammar.pest"]
 struct GlScriptSubsetGrammar;
 
-#[derive(Clone)]
-pub enum TokenRule {
-    IncludeToken,
-    IncludePath,
-    LineTerminator,
-    EndOfInput,
-    Untracked,
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Token {
-    pub rule: TokenRule,
+    pub rule: self::Rule,
     pub text: String,
     pub line: u32,
     pub col: u32,
@@ -24,13 +15,7 @@ pub struct Token {
 
 impl Token {
     fn new(pair: pest::iterators::Pair<'_, Rule>) -> Self {
-        let rule = match pair.as_rule() {
-            Rule::IncludeToken => TokenRule::IncludeToken,
-            Rule::IncludePath => TokenRule::IncludePath,
-            Rule::LineTerminator => TokenRule::LineTerminator,
-            Rule::EOI => TokenRule::EndOfInput,
-            _ => TokenRule::Untracked,
-        };
+        let rule = pair.as_rule();
         let sp = pair.as_span();
         let text = sp.as_str().to_string();
         let line_col = sp.start_pos().line_col();
@@ -45,11 +30,12 @@ impl Token {
     }
 }
 
+#[tracing::instrument(skip(raw_text))]
 pub fn parse(raw_text: &str) -> Vec<Token> {
-    GlScriptSubsetGrammar::parse(self::Rule::SourceFile, &raw_text)
-        .expect("parsed sourceFile")
-        .next()
+    GlScriptSubsetGrammar::parse(self::Rule::SourceFile, raw_text)
         .expect("sourceFile entry rule")
+        .next()
+        .expect("sourceFile contents")
         .into_inner()
         .map(Token::new)
         .collect()

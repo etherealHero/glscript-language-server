@@ -17,15 +17,15 @@ IncludeToken      =  { "import" | "#include" }
 IncludePath       = @{ DoubleStringLiteral | SingleStringLiteral | ("<" ~ (!(">" | LineTerminator) ~ ANY)* ~ ">") }
 
 // Regions
-RegionStartToken         =  { "#" ~ ("text" | "sql") }
-RegionStartUntrackedMark =  { (!LineTerminator ~ ANY)* }
-RegionChars              =  { (!(_regionClose | LineTerminator) ~ ANY)+ }
-RegionCloseToken         =  { "#end" ~ ("text" | "sql") }
-RegionCloseUntrackedMark =  { (!(LineTerminator | RegionCloseToken) ~ ANY)* }
-_regionStart             = _{ RegionStartToken ~ RegionStartUntrackedMark }
-_regionClose             = _{ RegionCloseUntrackedMark ~ RegionCloseToken ~ RegionCloseUntrackedMark }
-_region                  = _{
-    _regionStart ~ (LineTerminator | RegionChars)+ ~ _regionClose
+RegionOpen                =  { _regionOpenUntrackedMark ~ _regionOpenToken ~ _regionOpenUntrackedMark }
+RegionChars               =  { (!(RegionClose | LineTerminator) ~ ANY)+ }
+RegionClose               =  { _regionCloseUntrackedMark ~ _regionCloseToken ~ _regionCloseUntrackedMark }
+_regionOpenToken          = _{ "#" ~ ("text" | "sql") }
+_regionOpenUntrackedMark  = _{ (!(LineTerminator | _regionOpenToken) ~ ANY)* }
+_regionCloseToken         = _{ "#end" ~ ("text" | "sql") }
+_regionCloseUntrackedMark = _{ (!(LineTerminator | _regionCloseToken) ~ ANY)* }
+_region                   = _{
+    RegionOpen ~ (LineTerminator | RegionChars)+ ~ RegionClose
 }
 
 // String literals

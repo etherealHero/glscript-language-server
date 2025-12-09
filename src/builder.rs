@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
 
-use sha2::{Digest, Sha256};
 use sourcemap::{SourceMap, SourceMapBuilder, Token};
 
-use crate::parser::TokenRule;
+use crate::parser::Rule;
 use crate::proxy::PROXY_WORKSPACE;
 use crate::state::{Source, SourcePath, State, ToSource, ToSourcePath};
 
@@ -21,7 +20,7 @@ const DECL_PREFIX: &'static str = "/** @typedef";
 const LINK_PREFIX: &'static str = "/** {@link ";
 pub const MODULE_PREFIX: &'static str = "$MODULE_";
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Build {
     pub emit_text: String,
     pub emit_uri: Uri,
@@ -48,7 +47,8 @@ impl Build {
         }
 
         for t in self.source_map.tokens() {
-            if t.get_source().is_none() || source != t.get_source().expect("has source") {
+            let token_source = t.get_source();
+            if token_source.is_none() || source != token_source.expect("has source") {
                 continue;
             }
             if t.get_src_line() == pos.line && t.get_src_col() <= pos.character {
@@ -101,16 +101,20 @@ impl Build {
         }
     }
 
+    #[tracing::instrument(
+        skip(state, uri),
+        fields(file = %uri.as_str().split("/").last().unwrap_or_default())
+    )]
     pub fn new(state: &State, uri: &Uri) -> anyhow::Result<Self> {
         let mut smb = SourceMapBuilder::new(None);
         let visited_sources = &mut HashSet::<Source>::with_capacity(100);
         let emit_hasher = &mut DefaultHasher::new();
         let project = state.get_project();
-        let global_doc = &state.get_global_doc(); // TODO: create once before emit loop
+        let global_doc = state.get_global_doc();
         let emit_text = Self::emit(
             state,
             uri,
-            global_doc,
+            global_doc.as_ref(),
             project,
             &mut smb,
             &mut 0,
@@ -134,7 +138,8 @@ impl Build {
         // FIXME: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
         //                                                  ^^^^^^^^^^^^^ add subdirs like source file
         //          instead <project.join(PROXY_WORKSPACE)>/<source_hash.js>
-        let source_hash = Self::source_hash(&uri.source_path().source(project));
+        let source_hash =
+            state.source_to_hash(&state.source_path_to_source(&state.uri_to_source_path(uri)?)?);
         let source_path = project
             .join(PROXY_WORKSPACE)
             .join(format!("{source_hash}.js",));
@@ -143,7 +148,6 @@ impl Build {
         source_hash.hash(emit_hasher);
 
         let b = Self {
-            // emit_uri: dbg!(emit_uri),
             emit_uri,
             emit_text,
             emit_hash: emit_hasher.finish(),
@@ -160,85 +164,136 @@ impl Build {
     fn emit(
         state: &State,
         uri: &Uri,
-        global_doc: &Uri,
+        global_doc: Option<&Uri>,
         project: &SourcePath,
         smb: &mut SourceMapBuilder,
         dst_line: &mut u32,
-        visited: &mut HashSet<String>,
+        visited: &mut HashSet<Source>,
         hasher: &mut impl Hasher,
     ) -> anyhow::Result<String> {
-        let path = &uri.try_source_path()?;
-        let source = &path.source(project);
+        let path = &state.uri_to_source_path(uri)?;
+        let source = &state.source_path_to_source(path)?;
+
+        assert!(path.is_file());
+
         match visited.contains(source) {
             true => return Ok("".into()), // must be empty for emit global doc
             false => visited.insert(source.clone()),
         };
 
-        let global_text = Self::emit(
-            &state, global_doc, global_doc, project, smb, dst_line, visited, hasher,
-        );
+        let global_text = if let Some(doc) = global_doc {
+            let global = Some(doc);
+            Self::emit(state, doc, global, project, smb, dst_line, visited, hasher)
+        } else {
+            Ok("".to_owned())
+        };
 
         // TODO: ? append context prefix with root entry uri if definition failed with other builds
-        let ident = Self::source_hash(&source);
-        let prepend_module = format!(
-            "{}{DECL_PREFIX} {{'{source}'}} {MODULE_PREFIX}{ident} */{{}};\n",
-            global_text.unwrap_or_default(),
-        );
+        let source_file_decl = state.source_to_hash(source);
+        let mut emitted_source_file = String::from(global_text.unwrap_or_default());
 
-        ident.hash(hasher);
+        // /** @typedef {'%source_file_decl%'} */{};\n
+        emitted_source_file.push_str(DECL_PREFIX);
+        emitted_source_file.push_str(" {'");
+        emitted_source_file.push_str(source.as_str());
+        emitted_source_file.push_str("'} ");
+        emitted_source_file.push_str(MODULE_PREFIX);
+        emitted_source_file.push_str(source_file_decl.as_str());
+        emitted_source_file.push_str(" */{};\n");
+
+        source_file_decl.hash(hasher);
         smb.add(*dst_line, 0, 0, 0, Some(source), None, false);
         *dst_line += 1; // prepend_module end breakline
 
-        let source_tokens = state.get_doc_tokens(uri).into_iter();
-        let emitted_source_file = source_tokens.fold(prepend_module, |acc, r| match r.rule {
-            TokenRule::IncludeToken => acc,
-            TokenRule::IncludePath => {
-                let (line, col) = (r.line, r.col);
-                let dep_rpath = &r.text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
-                let dep_path = Self::resolve_path(path, project, dep_rpath);
-                let dep_uri = Uri::from_file_path(&dep_path).expect("valid dep_path");
-                let dep_source = match dep_uri.try_source_path() {
-                    Ok(dep_source_path) => dep_source_path.source(project),
-                    _ => dep_rpath.to_string(),
-                };
-                let dep_ident = Self::source_hash(&dep_source);
-                format!("{dep_ident}{line}{col}").hash(hasher);
+        let source_tokens = state.get_doc_tokens(uri);
+        let source_tokens = source_tokens.iter();
+        let mut skip_lt_after_region_open = false;
+        let mut first_lt_after_region_open = false;
+        let mut first_lt_after_region_open_offset = 0;
 
-                let link_ref = format!("\n{LINK_PREFIX}{MODULE_PREFIX}{dep_ident}}} */{{}};\n");
-                let prefix = LINK_PREFIX.len() as u32;
-                let suffix = prefix + MODULE_PREFIX.len() as u32 + dep_ident.len() as u32;
-                let acc_buf = acc + link_ref.as_str() + "\n";
+        for t in source_tokens {
+            match t.rule {
+                Rule::IncludeToken => {}
+                Rule::IncludePath => {
+                    let (line, col) = (t.line, t.col);
+                    let dep_rpath = t.text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
+                    let dep_path = Self::resolve_path(path, project, dep_rpath);
+                    let dep_uri = &Uri::from_file_path(&dep_path).expect("valid dep_path");
+                    let dep_source = match state.uri_to_source_path(dep_uri) {
+                        Ok(dep_sp) => state.source_path_to_source(&dep_sp).expect("dep is source"),
+                        _ => dep_rpath.to_string(),
+                    };
+                    let dep_decl = state.source_to_hash(&dep_source);
+                    let prefix = LINK_PREFIX.len() as u32;
+                    let suffix = prefix + MODULE_PREFIX.len() as u32 + dep_decl.len() as u32;
 
-                *dst_line += 1;
-                smb.add(*dst_line, prefix, line, col, Some(source), None, false);
-                smb.add(*dst_line, suffix, 0, 0, None, None, false);
-                *dst_line += 2;
+                    dep_decl.hash(hasher);
+                    line.hash(hasher);
+                    col.hash(hasher);
 
-                let dep_build = Self::emit(
-                    &state, &dep_uri, global_doc, project, smb, dst_line, visited, hasher,
-                );
-                let dep_text = match dep_build {
-                    Ok(emitted_dep_text) => {
-                        let blk = " ".repeat(col as usize + r.text.len());
-                        format!("{}{}", emitted_dep_text, blk)
+                    // \n/** {@link %dep_ident%} */{};\n\n
+                    emitted_source_file.push_str("\n");
+                    emitted_source_file.push_str(LINK_PREFIX);
+                    emitted_source_file.push_str(MODULE_PREFIX);
+                    emitted_source_file.push_str(&dep_decl);
+                    emitted_source_file.push_str("} */{};\n\n");
+
+                    *dst_line += 1;
+                    smb.add(*dst_line, prefix, line, col, Some(source), None, false);
+                    smb.add(*dst_line, suffix, 0, 0, None, None, false);
+                    *dst_line += 2;
+
+                    let dep_build = Self::emit(
+                        state, dep_uri, global_doc, project, smb, dst_line, visited, hasher,
+                    );
+
+                    if let Ok(ref emitted_dep_text) = dep_build {
+                        let blk = " ".repeat(col as usize + t.text.len());
+                        emitted_source_file.push_str(emitted_dep_text);
+                        emitted_source_file.push_str(blk.as_str());
                     }
-                    _ => "".into(),
-                };
+                }
+                _ => {
+                    let mut add_sourcemap = |dst_col: u32| {
+                        let source = Some(source.as_str());
+                        let dst_col = match first_lt_after_region_open {
+                            true => dst_col + first_lt_after_region_open_offset,
+                            false => dst_col,
+                        };
+                        smb.add(*dst_line, dst_col, t.line, t.col, source, None, false)
+                    };
 
-                acc_buf + dep_text.as_str()
-            }
-            _ => {
-                smb.add(*dst_line, r.col, r.line, r.col, Some(source), None, false);
-
-                match r.rule {
-                    TokenRule::LineTerminator | TokenRule::EndOfInput => {
-                        *dst_line += 1;
-                        acc + "\n"
+                    match t.rule {
+                        Rule::LineTerminator if skip_lt_after_region_open => {
+                            skip_lt_after_region_open = false;
+                            first_lt_after_region_open = true;
+                        }
+                        Rule::RegionOpen => {
+                            let escaped_backtick = " ".repeat(t.text.len() - 1) + "`";
+                            add_sourcemap(0);
+                            skip_lt_after_region_open = true;
+                            first_lt_after_region_open_offset = escaped_backtick.len() as u32;
+                            emitted_source_file.push_str(escaped_backtick.as_str());
+                        }
+                        Rule::RegionClose => {
+                            add_sourcemap(0);
+                            emitted_source_file.push_str("`;");
+                            emitted_source_file.push_str(" ".repeat(t.text.len() - 2).as_str());
+                        }
+                        Rule::LineTerminator | Rule::EOI => {
+                            add_sourcemap(t.col);
+                            first_lt_after_region_open = false;
+                            *dst_line += 1;
+                            emitted_source_file.push_str("\n");
+                        }
+                        _ => {
+                            add_sourcemap(t.col);
+                            emitted_source_file.push_str(t.text.as_str());
+                        }
                     }
-                    _ => acc + &r.text,
                 }
             }
-        });
+        }
 
         Ok(emitted_source_file)
     }
@@ -278,12 +333,20 @@ impl Build {
         }
     }
 
-    /// compatibility ECMAScript identifier hash from [`Source`]
+    // TODO: move from lib & refactor state to
+    // DashMap<Uri, Struct {source_path, source, source_hash(u64)?}>
     #[inline]
-    fn source_hash(source: &Source) -> String {
-        let digest = Sha256::digest(source.as_bytes());
-        let hex = hex::encode(digest);
-        let hash = format!("{:_<width$}", hex, width = &source.len());
+    #[allow(unused)]
+    pub fn fnv_hash(text: &str) -> u64 {
+        const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x100000001b3;
+
+        let mut hash = FNV_OFFSET;
+
+        for byte in text.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
 
         hash
     }
