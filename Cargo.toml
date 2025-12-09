@@ -27,6 +27,7 @@ serde_json = "1.0.95"
 
 pest = "2.8.1"
 pest_derive = "2.8.1"
+ropey = "1.6.1"
 
 sourcemap = "9.2.2"
 sha2 = "0.10.9"
