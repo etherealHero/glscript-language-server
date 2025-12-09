@@ -143,7 +143,14 @@ impl LanguageServer for Proxy {
     fn did_open(&mut self, params: lsp::DidOpenTextDocumentParams) -> Self::NotifyResult {
         let doc = &params.text_document;
         if doc.language_id == JS_LANG_ID && !doc.uri.source_path().ends_with(BUILD_FILE) {
-            self.state.set_doc(&doc.uri, &doc.text);
+            self.state.set_doc(
+                &doc.uri,
+                &[lsp::TextDocumentContentChangeEvent {
+                    text: doc.text.clone(),
+                    range_length: None,
+                    range: None,
+                }],
+            );
             let build_with_version = self.state.set_build(&doc.uri);
             let _ = self.server().did_open(lsp::DidOpenTextDocumentParams {
                 text_document: lsp::TextDocumentItem::new(
@@ -170,32 +177,7 @@ impl LanguageServer for Proxy {
         }
 
         // 1. apply changes to raw document
-        if let Some(text) = self.state.get_doc(uri) {
-            let changes = &params.content_changes;
-            let mut text = (*text).clone();
-            if text.is_empty() {
-                text = changes.into_iter().fold("".into(), |mut acc: String, c| {
-                    acc.push_str(&c.text.replace("\r\n", "\n"));
-                    acc
-                });
-            } else {
-                for change in changes {
-                    text.ends_with("\n").then(|| text.push_str("\n"));
-                    let lsp::Range { start, end } = change.range.expect("is some");
-                    let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
-                    let start_line = &mut lines[start.line as usize];
-                    let left = start_line[..start.character as usize].to_string();
-                    let end_line = &mut lines[end.line as usize];
-                    let right = end_line[end.character as usize..].to_string();
-                    let ctext = &change.text.clone().replace("\r\n", "\n");
-                    let replacement = format!("{left}{ctext}{right}");
-                    lines.splice(start.line as usize..=end.line as usize, [replacement]);
-                    text = lines.join("\n");
-                }
-            }
-
-            self.state.set_doc(uri, &text);
-        }
+        self.state.set_doc(uri, &params.content_changes);
 
         // 2. forward params into language server
         let mut builds_for_changes = self.state.get_builds_contains_document(uri);
