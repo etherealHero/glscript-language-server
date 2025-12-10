@@ -1,19 +1,8 @@
-mod forward;
-
-mod builder;
-mod parser;
-
-mod proxy;
-mod state;
-
-mod language_client;
-mod language_server;
-
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::proxy::Proxy;
+use glscript_language_server::proxy::Proxy;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {

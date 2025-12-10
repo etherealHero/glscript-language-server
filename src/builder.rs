@@ -9,7 +9,7 @@ use sourcemap::{SourceMap, SourceMapBuilder, Token};
 
 use crate::parser::Rule;
 use crate::proxy::PROXY_WORKSPACE;
-use crate::state::{Source, SourcePath, State, ToSource, ToSourcePath};
+use crate::state::{Source, SourcePath, State};
 
 pub const BUILD_FILE: &'static str = "build.js.emitted";
 
@@ -37,18 +37,16 @@ impl Build {
     pub fn forward_src_position(
         &self,
         pos: &lsp::Position,
-        pos_source: &Uri,
+        pos_source: &Source,
     ) -> Option<lsp::Position> {
         let mut token: Option<Token> = None;
-        let source = &pos_source.source_path().source(&self.project);
 
-        if !self.sources().contains(source) {
+        if !self.sources().contains(pos_source) {
             return None;
         }
 
         for t in self.source_map.tokens() {
-            let token_source = t.get_source();
-            if token_source.is_none() || source != token_source.expect("has source") {
+            if t.get_source() != Some(&pos_source) {
                 continue;
             }
             if t.get_src_line() == pos.line && t.get_src_col() <= pos.character {
@@ -68,7 +66,11 @@ impl Build {
         }
     }
 
-    pub fn forward_src_range(&self, range: &lsp::Range, range_source: &Uri) -> Option<lsp::Range> {
+    pub fn forward_src_range(
+        &self,
+        range: &lsp::Range,
+        range_source: &Source,
+    ) -> Option<lsp::Range> {
         let build_start_pos = self.forward_src_position(&range.start, range_source);
         let build_end_pos = self.forward_src_position(&range.end, range_source);
         match (build_start_pos, build_end_pos) {
@@ -103,7 +105,7 @@ impl Build {
 
     #[tracing::instrument(
         skip(state, uri),
-        fields(file = %uri.as_str().split("/").last().unwrap_or_default())
+        // fields(file = %uri.as_str().split("/").last().unwrap_or_default())
     )]
     pub fn new(state: &State, uri: &Uri) -> anyhow::Result<Self> {
         let mut smb = SourceMapBuilder::new(None);
@@ -161,6 +163,16 @@ impl Build {
 
 impl Build {
     // TODO: rewrite with EmitConfig
+
+    // TODO: optimize performance
+    // 1 find effected IO data
+    // 2 save snapshot before update
+    // 3 if state of target uri has similar Input snapshot, then fast effect IO for traverse emit
+    // 0 maybe save doc version (selfhosted)
+
+    // emit_hash save to state.doc
+    // remove build in state on emit_hash changed
+    // else update build like doc rope with recalc sourcemap
     fn emit(
         state: &State,
         uri: &Uri,
@@ -280,7 +292,8 @@ impl Build {
                             emitted_source_file.push_str("`;");
                             emitted_source_file.push_str(" ".repeat(t.text.len() - 2).as_str());
                         }
-                        Rule::LineTerminator | Rule::EOI => {
+                        // FIXME: fix missing EOI
+                        Rule::LineTerminator => {
                             add_sourcemap(t.col);
                             first_lt_after_region_open = false;
                             *dst_line += 1;

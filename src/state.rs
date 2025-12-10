@@ -18,9 +18,9 @@ pub struct BuildWithVersion {
 }
 
 #[derive(Debug)]
-pub struct Document {
-    pub buffer: Arc<Rope>,
-    pub tokens: Arc<Vec<Token>>,
+struct Document {
+    buffer: Arc<Rope>,
+    tokens: Arc<Vec<Token>>,
 }
 
 #[derive(Default, Debug)]
@@ -180,9 +180,7 @@ impl State {
     }
 
     /// returns SourcePath for canonicalize interface
-    pub fn get_builds_contains_document(&self, source_uri: &Uri) -> Vec<SourcePath> {
-        let source_path = &self.uri_to_source_path(source_uri).unwrap();
-        let source = &self.source_path_to_source(source_path).unwrap();
+    pub fn get_builds_contains_source(&self, source: &Source) -> Vec<SourcePath> {
         self.builds
             .iter()
             .filter(|e| e.value().build.sources().contains(source))

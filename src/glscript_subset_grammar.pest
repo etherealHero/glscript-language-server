@@ -3,7 +3,7 @@ SourceFile = { SOI ~ _expression* ~ EOI }
 
 _expression = _{ _tracked | Untracked }
 
-_tracked  = _{ _includeStatement | _region | _regex | _stringLiteral | _comment | LineTerminator }
+_tracked  = _{ _includeStatement | _region | Regex | _stringLiteral | _comment | LineTerminator }
 Untracked =  { (!(_tracked | PlaceholderCloseBracket) ~ ANY)+ | (!(_tracked) ~ ANY) }
 // .                         ^fix nested stmt
 
@@ -13,13 +13,13 @@ _maybeEscapedChar = _{ ("\\" ~ ANY) | (!"\\" ~ ANY) }
 
 // Include statement
 _includeStatement = _{ IncludeToken ~ (WhiteSpace | LineTerminator | _comment)+ ~ IncludePath }
-IncludeToken      =  { "import" | "#include" }
+IncludeToken      = @{ "import" | "#include" }
 IncludePath       = @{ DoubleStringLiteral | SingleStringLiteral | ("<" ~ (!(">" | LineTerminator) ~ ANY)* ~ ">") }
 
 // Regions
-RegionOpen                =  { _regionOpenUntrackedMark ~ _regionOpenToken ~ _regionOpenUntrackedMark }
-RegionChars               =  { (!(RegionClose | LineTerminator) ~ ANY)+ }
-RegionClose               =  { _regionCloseUntrackedMark ~ _regionCloseToken ~ _regionCloseUntrackedMark }
+RegionOpen                = @{ _regionOpenUntrackedMark ~ _regionOpenToken ~ _regionOpenUntrackedMark }
+RegionChars               = @{ (!(RegionClose | LineTerminator) ~ ANY)+ }
+RegionClose               = @{ _regionCloseUntrackedMark ~ _regionCloseToken ~ _regionCloseUntrackedMark }
 _regionOpenToken          = _{ "#" ~ ("text" | "sql") }
 _regionOpenUntrackedMark  = _{ (!(LineTerminator | _regionOpenToken) ~ ANY)* }
 _regionCloseToken         = _{ "#end" ~ ("text" | "sql") }
@@ -31,13 +31,13 @@ _region                   = _{
 // String literals
 _stringLiteral = _{ DoubleStringLiteral | SingleStringLiteral | _templateString }
 
-DoubleStringLiteral = { "\"" ~ (!("\"" | LineTerminator) ~ _maybeEscapedChar)* ~ "\"" }
-SingleStringLiteral = { "'" ~ (!("'" | LineTerminator) ~ _maybeEscapedChar)* ~ "'" }
+DoubleStringLiteral = @{ "\"" ~ (!("\"" | LineTerminator) ~ _maybeEscapedChar)* ~ "\"" }
+SingleStringLiteral = @{ "'" ~ (!("'" | LineTerminator) ~ _maybeEscapedChar)* ~ "'" }
 
-TemplateStringBracket   =  { "`" }
-TemplateStringChars     =  { (!(TemplateStringBracket | PlaceholderOpenBracket | LineTerminator) ~ _maybeEscapedChar)+ }
-PlaceholderOpenBracket  =  { "${" }
-PlaceholderCloseBracket =  { "}" }
+TemplateStringBracket   = @{ "`" }
+TemplateStringChars     = @{ (!(TemplateStringBracket | PlaceholderOpenBracket | LineTerminator) ~ _maybeEscapedChar)+ }
+PlaceholderOpenBracket  = @{ "${" }
+PlaceholderCloseBracket = @{ "}" }
 _templateString         = _{ TemplateStringBracket ~ _templatePart* ~ TemplateStringBracket }
 _templatePart           = _{ _templateExpression | LineTerminator | TemplateStringChars }
 _templateExpression     = _{
@@ -45,18 +45,18 @@ _templateExpression     = _{
 }
 
 // RegExp
-_regex       = _{ RegexBracket ~ RegexChars ~ RegexBracket }
-RegexChars   =  { (!(RegexBracket | LineTerminator) ~ _maybeEscapedChar)+ }
-RegexBracket =  { !("\\/" | MultiLineCommentOpenBracket) ~ "/" }
+Regex         = @{ _regexBracket ~ _regexChars ~ _regexBracket }
+_regexChars   = _{ (!(_regexBracket | LineTerminator) ~ _maybeEscapedChar)+ }
+_regexBracket = _{ (!("\\/" | MultiLineCommentOpenBracket) ~ "/") }
 
 // Comments
 _comment = _{ SingleLineComment | _muliLineComment }
 
-SingleLineComment = { "//" ~ (!LineTerminator ~ ANY)* }
+SingleLineComment = @{ "//" ~ (!LineTerminator ~ ANY)* }
 
-MultiLineCommentOpenBracket  =  { "/*" }
-MultiLineCommentChars        =  { (!(MultiLineCommentCloseBracket | LineTerminator) ~ _maybeEscapedChar)+ }
-MultiLineCommentCloseBracket =  { "*/" }
+MultiLineCommentOpenBracket  = @{ "/*" }
+MultiLineCommentChars        = @{ (!(MultiLineCommentCloseBracket | LineTerminator) ~ _maybeEscapedChar)+ }
+MultiLineCommentCloseBracket = @{ "*/" }
 _muliLineComment             = _{
     MultiLineCommentOpenBracket ~ (LineTerminator | MultiLineCommentChars)+ ~ MultiLineCommentCloseBracket
 }

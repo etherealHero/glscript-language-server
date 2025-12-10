@@ -1,8 +1,7 @@
-use pest::Parser;
-use pest_derive::Parser;
+use faster_pest::*;
 
 #[derive(Parser)]
-#[grammar = "./glscript_subset_grammar.pest"]
+#[grammar = "src/glscript_subset_grammar.pest"]
 struct GlScriptSubsetGrammar;
 
 #[derive(Clone, Debug)]
@@ -14,10 +13,10 @@ pub struct Token {
 }
 
 impl Token {
-    fn new(pair: pest::iterators::Pair<'_, Rule>) -> Self {
+    fn new(pair: faster_pest::Pair2<'_, Ident>) -> Self {
         let rule = pair.as_rule();
         let sp = pair.as_span();
-        let text = sp.as_str().to_string();
+        let text = sp.as_str().to_owned();
         let line_col = sp.start_pos().line_col();
         let (line, col) = (line_col.0 as u32 - 1, line_col.1 as u32 - 1);
 

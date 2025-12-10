@@ -25,8 +25,7 @@ futures = { version = "0.3.28", default-features = false, features = [
 async-process = "2"
 serde_json = "1.0.95"
 
-pest = "2.8.1"
-pest_derive = "2.8.1"
+faster-pest = "0.1.4"
 ropey = "1.6.1"
 
 sourcemap = "9.2.2"
@@ -48,8 +47,14 @@ tokio = { version = "1.41.1", features = [
   "signal",
   "io-util",
 ] }
+indoc = "2.0.6"
+faster-pest-derive = "0.1.3"
 
 [profile.release]
 opt-level = 3
 codegen-units = 1
 lto = "thin"
+
+[[test]]
+name = "parser"
+path = "src/unit_tests/parser.rs"

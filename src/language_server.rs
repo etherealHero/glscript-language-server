@@ -167,7 +167,7 @@ impl LanguageServer for Proxy {
         ControlFlow::Continue(())
     }
 
-    // #[tracing::instrument(skip(self, params))]
+    #[tracing::instrument(skip(self, params))]
     fn did_change(&mut self, params: lsp::DidChangeTextDocumentParams) -> Self::NotifyResult {
         let uri = &params.text_document.uri;
 
@@ -176,17 +176,19 @@ impl LanguageServer for Proxy {
             return ControlFlow::Continue(());
         }
 
+        let source_path = self.state.uri_to_source_path(uri).unwrap();
+        let source = self.state.source_path_to_source(&source_path).unwrap();
+
         // 1. apply changes to raw document
         self.state.set_doc(uri, &params.content_changes);
 
         // 2. forward params into language server
-        let mut builds_for_changes = self.state.get_builds_contains_document(uri);
-        builds_for_changes
-            .sort_by(|a, b| (a != &uri.source_path()).cmp(&(b != &uri.source_path())));
+        let mut builds_for_changes = self.state.get_builds_contains_source(&source);
+        builds_for_changes.sort_by(|a, b| (a != &source_path).cmp(&(b != &source_path)));
 
         let mut sources_changed = false;
 
-        assert!(builds_for_changes.contains(&uri.source_path()));
+        assert_eq!(builds_for_changes.first(), Some(&source_path));
 
         for ref build_source_path in builds_for_changes {
             let build_uri = &Uri::from_file_path(build_source_path).expect("valid build entry uri");
@@ -198,7 +200,7 @@ impl LanguageServer for Proxy {
                     continue;
                 }
 
-                match build.forward_src_range(&change.range.expect("is some"), uri) {
+                match build.forward_src_range(&change.range.expect("is some"), &source) {
                     Some(r) => forward_changes.push(lsp::TextDocumentContentChangeEvent {
                         range: Some(r),
                         range_length: change.range_length,
@@ -283,13 +285,16 @@ impl LanguageServer for Proxy {
             partial_result_params: lsp::PartialResultParams::default(),
         });
 
+        let source_path = self.state.uri_to_source_path(uri).unwrap();
+        let source = self.state.source_path_to_source(&source_path).unwrap();
+
         Box::pin(async move {
             let uri = &mut params.text_document_position_params.text_document.uri;
             let uri_canonicalized = uri.canonicalize();
             let pos = &mut params.text_document_position_params.position;
 
             // TODO: create util
-            let build_pos = build.forward_src_position(pos, uri);
+            let build_pos = build.forward_src_position(pos, &source);
 
             if build_pos.is_none() {
                 let err = format!("Forward src position `{pos:?}` failed");
@@ -349,6 +354,8 @@ impl LanguageServer for Proxy {
         let req_build_sources = req_build.sources();
         let project = self.state.get_project().clone();
         let state = self.state.clone();
+        let source_path = self.state.uri_to_source_path(uri).unwrap();
+        let source = self.state.source_path_to_source(&source_path).unwrap();
 
         Box::pin(async move {
             let doc_pos = &mut params.text_document_position_params;
@@ -356,7 +363,7 @@ impl LanguageServer for Proxy {
             let pos = &mut doc_pos.position;
 
             // TODO: create util
-            let req_build_pos = req_build.forward_src_position(pos, uri);
+            let req_build_pos = req_build.forward_src_position(pos, &source);
 
             if req_build_pos.is_none() {
                 let err = format!("Forward src position `{pos:?}` failed");
