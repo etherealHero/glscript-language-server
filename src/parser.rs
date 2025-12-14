@@ -1,9 +1,12 @@
 use faster_pest::*;
 
+// TODO: benchmark with multiline literals without linebreak + post parsing split by linebreak
 #[derive(Parser)]
 #[grammar = "src/glscript_subset_grammar.pest"]
 struct GlScriptSubsetGrammar;
 
+// TODO: wrap with enum variants
+// TODO: emit buld hash to doc hash (on parse) - CHECK bench without hasher on emit
 #[derive(Clone, Debug)]
 pub struct Token {
     pub rule: self::Rule,

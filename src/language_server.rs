@@ -1,14 +1,15 @@
 use std::fs;
 use std::ops::ControlFlow;
+use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::lsp_types::{notification::Notification, request::Request};
 use async_lsp::{ErrorCode, ResponseError};
-use async_lsp::{LanguageClient, LanguageServer, lsp_types as lsp};
+use async_lsp::{LanguageServer, lsp_types as lsp};
 
-use crate::builder::{BUILD_FILE, Build, MODULE_PREFIX};
-use crate::state::{Canonicalize, ToSource, ToSourcePath};
+use crate::builder::{BUILD_FILE, Build};
+use crate::state::{Canonicalize, IDENTIFIER_PREFIX};
 
 use crate::proxy::{DECL_FILE_EXT, JS_LANG_ID, PROXY_WORKSPACE};
 use crate::proxy::{Proxy, ResFut, ResReq, ResReqProxy};
@@ -21,105 +22,36 @@ impl LanguageServer for Proxy {
     type NotifyResult = ControlFlow<async_lsp::Result<()>>;
 
     fn initialize(&mut self, mut params: lsp::InitializeParams) -> ResFut<R::Initialize> {
-        const GLSCRIPT_INDEXING_TOKEN: &'static str = "glscript_indexing";
+        const _GLSCRIPT_INDEXING_TOKEN: &'static str = "glscript_indexing";
+        const JSCONFIG: &'static str = "jsconfig.json";
 
-        let mut client = self.client();
         // FIXME: if node_modules not installed show user error
-
         // FIXME: if client not has workspace_folders show client Error message for open Project Folder
         // TODO: if workspace_folders.len() > 2 show error for unsupported
-        if let Some([root_ws, ..]) = params.workspace_folders.as_deref() {
-            let project_uri = &root_ws.uri;
-            self.state.set_project(project_uri);
+        if let Some([root_ws, ..]) = params.workspace_folders.as_deref_mut() {
+            let ws_dir = &root_ws.uri.to_file_path().unwrap();
+            let proxy_ws_dir = &mut ws_dir.clone().join(PROXY_WORKSPACE);
 
-            let global_script = params
-                .initialization_options
-                .as_ref()
-                .and_then(|opt| opt.as_object())
-                .and_then(|m| m.get("proxy"))
-                .and_then(|v| v.as_object())
-                .and_then(|p| p.get("globalScript"))
-                .and_then(|v| v.as_str());
+            fs::create_dir_all(&proxy_ws_dir).unwrap();
+            fs::copy(ws_dir.join(JSCONFIG), proxy_ws_dir.join(JSCONFIG)).unwrap();
 
-            match global_script {
-                Some(doc) if !doc.is_empty() && project_uri.source_path().join(doc).is_file() => {
-                    let path = &project_uri.source_path().join(doc);
-                    let global_doc_uri = Uri::from_file_path(path).expect("valid global doc uri");
-                    let global_doc_source_path = self.state.uri_to_source_path(&global_doc_uri);
-                    let _ = global_doc_source_path.map_err(|err| {
-                        // TODO: set glscript as constant script
-                        // where users add some deps
-                        let message = format!(
-                            "{}: {} ({}) {} {err}. {}",
-                            "glscript-language-server",
-                            "step to setup global script",
-                            global_doc_uri.path(),
-                            "from config options failed:",
-                            "Try to reconfigure options, then restart language server"
-                        );
-                        let _ = client.show_message(lsp::ShowMessageParams {
-                            typ: lsp::MessageType::WARNING,
-                            message,
-                        });
-                    });
+            self.state.set_project(&root_ws.uri);
 
-                    // FIXME: progress not show
-                    let _ = client.progress(lsp::ProgressParams {
-                        token: lsp::NumberOrString::String(GLSCRIPT_INDEXING_TOKEN.into()),
-                        value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::Begin(
-                            lsp::WorkDoneProgressBegin {
-                                title: "Indexing".into(),
-                                message: Some("build global document...".into()),
-                                ..Default::default()
-                            },
-                        )),
-                    });
+            let _ = fs::File::create_new(self.state.get_global_doc().to_file_path().unwrap());
 
-                    self.state.set_global_doc(global_doc_uri.clone());
-                    self.state.set_build(&global_doc_uri);
-                }
-                _ => {}
-            }
+            self.state.set_build(&self.state.get_global_doc());
+
+            root_ws.uri = Uri::from_directory_path(proxy_ws_dir).unwrap();
+        }
+
+        #[allow(deprecated)]
+        {
+            params.root_path = None;
+            params.root_uri = None;
         }
 
         let mut service = self.server();
         Box::pin(async move {
-            let mut proxy_workspace_dir_created = false;
-
-            if let Some(wf) = &mut params.workspace_folders {
-                for w in wf {
-                    let ws_dir = &w.uri.to_file_path().expect("valid path of workspace uri");
-                    let proxy_ws_dir = &mut ws_dir.clone().join(PROXY_WORKSPACE);
-
-                    if !proxy_workspace_dir_created {
-                        fs::create_dir_all(&proxy_ws_dir).expect("create proxy workspace folder");
-
-                        *proxy_ws_dir = proxy_ws_dir.canonicalize().expect("proxy ws dir");
-
-                        fs::copy(
-                            ws_dir.join("jsconfig.json"),
-                            proxy_ws_dir.join("jsconfig.json"),
-                        )
-                        .map_err(|e| format!("jsconfig copy into proxy workspace failed: {e}"))
-                        .expect("jsconfig copied into proxy workspace");
-
-                        proxy_workspace_dir_created = true;
-                    }
-
-                    w.uri = Uri::from_directory_path(proxy_ws_dir).expect("valid workspace folder")
-                }
-            }
-
-            #[allow(deprecated)]
-            {
-                params.root_path = None;
-                params.root_uri = None;
-            }
-
-            let _ = client.work_done_progress_create(lsp::WorkDoneProgressCreateParams {
-                token: lsp::NumberOrString::String(GLSCRIPT_INDEXING_TOKEN.into()),
-            });
-
             let initialize_res = service.initialize(params).await;
             initialize_res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
         })
@@ -142,7 +74,7 @@ impl LanguageServer for Proxy {
 
     fn did_open(&mut self, params: lsp::DidOpenTextDocumentParams) -> Self::NotifyResult {
         let doc = &params.text_document;
-        if doc.language_id == JS_LANG_ID && !doc.uri.source_path().ends_with(BUILD_FILE) {
+        if doc.language_id == JS_LANG_ID && !doc.uri.as_str().ends_with(BUILD_FILE) {
             self.state.set_doc(
                 &doc.uri,
                 &[lsp::TextDocumentContentChangeEvent {
@@ -154,10 +86,10 @@ impl LanguageServer for Proxy {
             let build_with_version = self.state.set_build(&doc.uri);
             let _ = self.server().did_open(lsp::DidOpenTextDocumentParams {
                 text_document: lsp::TextDocumentItem::new(
-                    build_with_version.build.emit_uri,
+                    build_with_version.build.emit_uri.clone(),
                     JS_LANG_ID.into(),
                     build_with_version.version,
-                    build_with_version.build.emit_text,
+                    build_with_version.build.emit_text.clone(),
                 ),
             });
         } else {
@@ -176,31 +108,30 @@ impl LanguageServer for Proxy {
             return ControlFlow::Continue(());
         }
 
-        let source_path = self.state.uri_to_source_path(uri).unwrap();
-        let source = self.state.source_path_to_source(&source_path).unwrap();
+        let doc = self.state.get_doc(uri).unwrap();
 
         // 1. apply changes to raw document
         self.state.set_doc(uri, &params.content_changes);
 
         // 2. forward params into language server
-        let mut builds_for_changes = self.state.get_builds_contains_source(&source);
-        builds_for_changes.sort_by(|a, b| (a != &source_path).cmp(&(b != &source_path)));
+        let mut builds_for_changes = self.state.get_builds_contains_source(&doc.source);
+        builds_for_changes.sort_by(|a, b| (*a != *doc.path).cmp(&(*b != *doc.path)));
 
         let mut sources_changed = false;
 
-        assert_eq!(builds_for_changes.first(), Some(&source_path));
+        assert_eq!(builds_for_changes.first(), Some(&*doc.path));
 
         for ref build_source_path in builds_for_changes {
             let build_uri = &Uri::from_file_path(build_source_path).expect("valid build entry uri");
             let build = self.state.get_build(build_uri).expect("iteration build");
-            let mut forward_changes = vec![];
+            let mut forward_changes = Vec::with_capacity(params.content_changes.len());
 
             for change in &params.content_changes {
                 if change.range.is_none() {
                     continue;
                 }
 
-                match build.forward_src_range(&change.range.expect("is some"), &source) {
+                match build.forward_src_range(&change.range.expect("is some"), &doc.source) {
                     Some(r) => forward_changes.push(lsp::TextDocumentContentChangeEvent {
                         range: Some(r),
                         range_length: change.range_length,
@@ -223,7 +154,7 @@ impl LanguageServer for Proxy {
                 },
                 content_changes: if sources_changed {
                     vec![lsp::TextDocumentContentChangeEvent {
-                        text: new_build_with_version.build.emit_text,
+                        text: new_build_with_version.build.emit_text.clone(),
                         range_length: None,
                         range: None,
                     }]
@@ -251,7 +182,7 @@ impl LanguageServer for Proxy {
         match self.state.get_build(&params.text_document.uri) {
             Some(b) => {
                 let _ = self.server().did_close(lsp::DidCloseTextDocumentParams {
-                    text_document: lsp::TextDocumentIdentifier::new(b.emit_uri),
+                    text_document: lsp::TextDocumentIdentifier::new(b.emit_uri.clone()),
                 });
             }
             None => self.server().did_close(params).expect("did close"),
@@ -264,7 +195,7 @@ impl LanguageServer for Proxy {
         let uri = &params.text_document_position_params.text_document.uri;
         let pos = &params.text_document_position_params.position;
 
-        let build: Build;
+        let build: Arc<Build>;
         match self.state.get_build(uri) {
             None => {
                 return Box::pin(async move {
@@ -276,6 +207,7 @@ impl LanguageServer for Proxy {
         };
 
         // TODO: send cancel req on timeout
+        let source = self.state.get_doc(uri).unwrap().source.clone();
         let decl_req = self.definition(lsp::GotoDefinitionParams {
             text_document_position_params: lsp::TextDocumentPositionParams::new(
                 lsp::TextDocumentIdentifier::new(uri.clone()),
@@ -284,9 +216,6 @@ impl LanguageServer for Proxy {
             work_done_progress_params: lsp::WorkDoneProgressParams::default(),
             partial_result_params: lsp::PartialResultParams::default(),
         });
-
-        let source_path = self.state.uri_to_source_path(uri).unwrap();
-        let source = self.state.source_path_to_source(&source_path).unwrap();
 
         Box::pin(async move {
             let uri = &mut params.text_document_position_params.text_document.uri;
@@ -340,7 +269,7 @@ impl LanguageServer for Proxy {
         let mut service = self.server();
         let uri = &params.text_document_position_params.text_document.uri;
 
-        let req_build: Build;
+        let req_build: Arc<Build>;
         match self.state.get_build(uri) {
             None => {
                 return Box::pin(async move {
@@ -352,10 +281,7 @@ impl LanguageServer for Proxy {
         };
 
         let req_build_sources = req_build.sources();
-        let project = self.state.get_project().clone();
         let state = self.state.clone();
-        let source_path = self.state.uri_to_source_path(uri).unwrap();
-        let source = self.state.source_path_to_source(&source_path).unwrap();
 
         Box::pin(async move {
             let doc_pos = &mut params.text_document_position_params;
@@ -363,7 +289,8 @@ impl LanguageServer for Proxy {
             let pos = &mut doc_pos.position;
 
             // TODO: create util
-            let req_build_pos = req_build.forward_src_position(pos, &source);
+            let req_source = state.get_doc(uri).unwrap().source.clone();
+            let req_build_pos = req_build.forward_src_position(pos, &req_source);
 
             if req_build_pos.is_none() {
                 let err = format!("Forward src position `{pos:?}` failed");
@@ -396,7 +323,7 @@ impl LanguageServer for Proxy {
 
                     if let Some(ref any_build) = state.get_build_by_emit_uri(&link.target_uri) {
                         let source_uri = forward_build_range(&mut link.target_range, any_build)?;
-                        let source = &source_uri.source_path().source(&project);
+                        let source = &*state.get_doc(&source_uri).unwrap().source;
 
                         if !req_build_sources.contains(source) {
                             continue;
@@ -410,10 +337,8 @@ impl LanguageServer for Proxy {
                         continue;
                     }
 
-                    let target_uri_source_path = state.uri_to_source_path(&link.target_uri);
-                    if let Ok(link_source_path) = target_uri_source_path {
-                        let link_source = &link_source_path.source(&project);
-                        if !req_build_sources.contains(link_source) {
+                    if let Ok(doc) = state.get_doc(&link.target_uri) {
+                        if !req_build_sources.contains(&*doc.source) {
                             continue;
                         }
 
@@ -529,7 +454,7 @@ fn strip_module_hash(mut hover: lsp::Hover) -> lsp::Hover {
     type H = lsp::HoverContents;
     type S = lsp::MarkedString;
 
-    let re = regex::Regex::new(&format!(r"{}\w+", regex::escape(MODULE_PREFIX))).expect("valid re");
+    let re = regex::Regex::new(&format!(r"{}\w+", regex::escape(IDENTIFIER_PREFIX))).unwrap();
     let patch = |s: &str| re.replace_all(s, "MODULE").to_string();
 
     match &mut hover.contents {
