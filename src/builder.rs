@@ -339,6 +339,11 @@ impl Build {
                             *dst_line += 1;
                             writer.push('\n');
                         }
+                        Token::CommonWithLineBreak(t) => {
+                            add_sourcemap(t.col, t.line, t.col);
+                            *dst_line += 1;
+                            writer.push_str(&t.text);
+                        }
                         Token::Common(t) => {
                             add_sourcemap(t.col, t.line, t.col);
                             writer.push_str(&t.text);

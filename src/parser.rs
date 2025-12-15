@@ -1,7 +1,6 @@
 mod grammar {
     use faster_pest::*;
 
-    // TODO: benchmark with multiline literals without linebreak + post parsing split by linebreak
     #[derive(Parser)]
     #[grammar = "src/glscript_subset_grammar.pest"]
     pub struct GlScriptSubsetGrammar;
@@ -19,6 +18,7 @@ pub enum Token {
     RegionClose(RawSpan),
     LineTerminator(PositionSpan),
     Common(RawSpan),
+    CommonWithLineBreak(RawSpan),
 }
 
 #[derive(Clone, Debug)]
@@ -38,6 +38,7 @@ struct PendingSpan {
     builder: SmolStrBuilder,
     line: u32,
     col: u32,
+    ends_with_linebreak: bool,
 }
 
 impl RawSpan {
@@ -62,12 +63,13 @@ pub fn parse(raw_text: &str) -> Vec<Token> {
     let mut pending: Option<PendingSpan> = None;
 
     let flush = |out: &mut Vec<Token>, pending: &mut Option<PendingSpan>| {
-        if let Some(PendingSpan { builder, line, col }) = pending.take() {
-            out.push(Token::Common(RawSpan {
-                text: builder.finish(),
-                line,
-                col,
-            }));
+        if let Some(p) = pending.take() {
+            let (text, line, col) = (p.builder.finish(), p.line, p.col);
+            let span = RawSpan { text, line, col };
+            match p.ends_with_linebreak {
+                true => out.push(Token::CommonWithLineBreak(span)),
+                false => out.push(Token::Common(span)),
+            };
         }
     };
 
@@ -75,20 +77,24 @@ pub fn parse(raw_text: &str) -> Vec<Token> {
         let rule = pair.as_rule();
 
         match rule {
-            Rule::LineTerminator
-            | Rule::RegionOpen
-            | Rule::RegionClose
-            | Rule::IncludeToken
-            | Rule::IncludePath => flush(&mut out, &mut pending),
+            Rule::IncludeToken | Rule::IncludePath => flush(&mut out, &mut pending),
+            Rule::RegionOpen | Rule::RegionClose => flush(&mut out, &mut pending),
             _ => {}
-        };
+        }
 
         match rule {
             Rule::IncludeToken => out.push(Token::Include),
             Rule::IncludePath => out.push(Token::IncludePath(RawSpan::new(pair))),
             Rule::RegionOpen => out.push(Token::RegionOpen(RawSpan::new(pair))),
             Rule::RegionClose => out.push(Token::RegionClose(RawSpan::new(pair))),
-            Rule::LineTerminator => {
+            Rule::LineTerminator if pending.is_some() => {
+                let acc = pending.as_mut().unwrap();
+                acc.builder.push_str(pair.as_span().as_str());
+                acc.ends_with_linebreak = true;
+                flush(&mut out, &mut pending);
+            }
+            Rule::LineTerminator if pending.is_none() => {
+                flush(&mut out, &mut pending);
                 let line_col = pair.as_span().start_pos().line_col();
                 let (line, col) = (line_col.0 as u32 - 1, line_col.1 as u32 - 1);
                 out.push(Token::LineTerminator(PositionSpan { line, col }));
@@ -105,7 +111,12 @@ pub fn parse(raw_text: &str) -> Vec<Token> {
                         flush(&mut out, &mut pending);
                         let mut builder = SmolStrBuilder::new();
                         builder.push_str(text);
-                        pending = Some(PendingSpan { builder, line, col });
+                        pending = Some(PendingSpan {
+                            ends_with_linebreak: false,
+                            builder,
+                            line,
+                            col,
+                        });
                     }
                 };
             }
