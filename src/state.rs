@@ -250,8 +250,7 @@ impl State {
 
         match self.builds.get_mut(path) {
             Some(mut b) => {
-                let emit_buf_capacity = Some(b.build.emit_text.len());
-                let new_build = Build::new(&self, source_uri, emit_buf_capacity).unwrap();
+                let new_build = Build::new(&self, source_uri, Some(b.build.clone())).unwrap();
                 b.build = new_build.into();
                 b.version += 1;
             }

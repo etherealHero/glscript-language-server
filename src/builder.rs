@@ -4,10 +4,9 @@ use std::sync::Arc;
 
 use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
+use sourcemap::{SourceMap, SourceMapBuilder};
 
-use sourcemap::{SourceMap, SourceMapBuilder, Token};
-
-use crate::parser::Rule;
+use crate::parser::Token;
 use crate::proxy::PROXY_WORKSPACE;
 use crate::state::{DocumentHash, DocumentIdentifier, Source, SourcePath, State};
 
@@ -20,8 +19,10 @@ pub const BUILD_SOURCEMAP_FILE: &'static str = "build.js.emitted.map";
 pub struct Build {
     pub emit_text: String,
     pub emit_uri: Uri,
-    pub emit_hash: u64,
     source_map: SourceMap,
+
+    #[deprecated(note = "TODO: move to state.doc hash")]
+    pub emit_hash: u64,
 
     #[deprecated]
     project: SourcePath,
@@ -37,7 +38,7 @@ impl Build {
         pos: &lsp::Position,
         pos_source: &Source,
     ) -> Option<lsp::Position> {
-        let mut token: Option<Token> = None;
+        let mut token: Option<sourcemap::Token> = None;
 
         if !self.sources().contains(pos_source) {
             return None;
@@ -100,29 +101,57 @@ impl Build {
             _ => None,
         }
     }
+}
 
+impl Build {
     #[tracing::instrument(
-        skip(state, uri, emit_buf_capacity),
+        skip(state, uri, prev_build),
         // fields(file = %uri.as_str().split("/").last().unwrap_or_default())
     )]
-    pub fn new(state: &State, uri: &Uri, emit_buf_capacity: Option<usize>) -> anyhow::Result<Self> {
-        let mut smb = SourceMapBuilder::new(None);
+    pub fn new(state: &State, uri: &Uri, prev_build: Option<Arc<Self>>) -> anyhow::Result<Self> {
+        let mut maps = Vec::with_capacity(
+            prev_build
+                .as_ref()
+                .and_then(|pb| pb.source_map.get_token_count().into())
+                .unwrap_or_default() as usize,
+        );
         let visited_sources = &mut HashSet::<DocumentHash>::with_capacity(100);
         let emit_hasher = &mut DefaultHasher::new();
         let project = state.get_project();
         let global_doc = &state.get_global_doc();
-        let emit_text = &mut String::with_capacity(emit_buf_capacity.unwrap_or_default());
+        let emit_text = &mut String::with_capacity(
+            prev_build
+                .as_ref()
+                .and_then(|pb| pb.emit_text.len().into())
+                .unwrap_or_default(),
+        );
         let _ = Self::emit(
             state,
             uri,
             global_doc,
-            &mut smb,
+            &mut maps,
             &mut 0,
             visited_sources,
             emit_hasher,
             emit_text,
         )?;
-        let source_map = smb.into_sourcemap();
+        let source_map = {
+            let mut smb = SourceMapBuilder::new(None);
+
+            for m in maps {
+                smb.add(
+                    m.dst_line,
+                    m.dst_col,
+                    m.src_line,
+                    m.src_col,
+                    m.source.as_ref().map(|v| &***v),
+                    None,
+                    false,
+                );
+            }
+
+            smb.into_sourcemap()
+        };
 
         #[cfg(debug_assertions)]
         {
@@ -150,12 +179,39 @@ impl Build {
         let b = Self {
             emit_uri,
             emit_text: emit_text.to_owned(),
+            source_map,
+
             emit_hash: emit_hasher.finish(),
             project: project.to_owned(),
-            source_map,
         };
 
         Ok(b)
+    }
+}
+
+struct PendingMap {
+    dst_line: u32,
+    dst_col: u32,
+    src_line: u32,
+    src_col: u32,
+    source: Option<Arc<String>>,
+}
+
+impl PendingMap {
+    fn new(
+        dst_line: u32,
+        dst_col: u32,
+        src_line: u32,
+        src_col: u32,
+        source: Option<Arc<String>>,
+    ) -> Self {
+        Self {
+            dst_line,
+            dst_col,
+            src_line,
+            src_col,
+            source,
+        }
     }
 }
 
@@ -177,7 +233,7 @@ impl Build {
         st: &State,
         uri: &Uri,
         g_uri: &Uri,
-        smb: &mut SourceMapBuilder,
+        smb: &mut Vec<PendingMap>,
         dst_line: &mut u32,
         visited: &mut HashSet<DocumentHash>,
         hasher: &mut impl Hasher,
@@ -195,10 +251,9 @@ impl Build {
 
         // TODO: ? append context prefix with root entry uri if definition failed with other builds
         writer.push_str(decl_stmt);
-
         hasher.write_u64(*d.hash);
 
-        smb.add(*dst_line, 0, 0, 0, Some(source), None, false);
+        smb.push(PendingMap::new(*dst_line, 0, 0, 0, Some(source.clone())));
         *dst_line += 1; // prepend_module end breakline
 
         let mut skip_lt_after_region_open = false;
@@ -206,9 +261,9 @@ impl Build {
         let mut first_lt_after_region_open_offset = 0;
 
         for t in tokens {
-            match t.rule {
-                Rule::IncludeToken => {}
-                Rule::IncludePath => {
+            match t {
+                Token::Include => {}
+                Token::IncludePath(t) => {
                     let (line, col) = (t.line, t.col);
                     let dep_lit = t.text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
                     let dep_path = st.path_resolver(&path, dep_lit);
@@ -230,8 +285,9 @@ impl Build {
                     writer.push_str(&dep_link);
 
                     *dst_line += 1;
-                    smb.add(*dst_line, prefix, line, col, Some(source), None, false);
-                    smb.add(*dst_line, suffix, 0, 0, None, None, false);
+                    let source = Some(source.clone());
+                    smb.push(PendingMap::new(*dst_line, prefix, line, col, source));
+                    smb.push(PendingMap::new(*dst_line, suffix, 0, 0, None));
                     *dst_line += 2;
 
                     let dep_build =
@@ -239,53 +295,55 @@ impl Build {
 
                     // TODO: if err ? should emit blk ?
                     if dep_build.is_ok() {
-                        for _ in 0..(col as usize + t.text.len()) {
+                        for _ in 0..(col + t.text.len() as u32) {
                             writer.push(' ');
                         }
                     }
                 }
                 _ => {
-                    let mut add_sourcemap = |dst_col: u32| {
-                        let source = Some(source.as_str());
+                    let mut add_sourcemap = |dst_col: u32, l: u32, c: u32| {
+                        let source = Some(source.clone());
                         let dst_col = match first_lt_after_region_open {
                             true => dst_col + first_lt_after_region_open_offset,
                             false => dst_col,
                         };
-                        smb.add(*dst_line, dst_col, t.line, t.col, source, None, false)
+                        smb.push(PendingMap::new(*dst_line, dst_col, l, c, source));
                     };
 
-                    match t.rule {
-                        Rule::LineTerminator if skip_lt_after_region_open => {
+                    match t {
+                        Token::LineTerminator(_) if skip_lt_after_region_open => {
                             skip_lt_after_region_open = false;
                             first_lt_after_region_open = true;
                         }
-                        Rule::RegionOpen => {
-                            add_sourcemap(0);
+                        Token::RegionOpen(t) => {
+                            add_sourcemap(0, t.line, t.col);
                             skip_lt_after_region_open = true;
                             first_lt_after_region_open_offset = t.text.len() as u32;
                             for _ in 0..(t.text.len() - 1) {
                                 writer.push(' ');
                             }
-                            writer.push_str("`");
+                            writer.push('`');
                         }
-                        Rule::RegionClose => {
-                            add_sourcemap(0);
-                            writer.push_str("`;");
+                        Token::RegionClose(t) => {
+                            add_sourcemap(0, t.line, t.col);
+                            writer.push('`');
+                            writer.push(';');
                             for _ in 0..(t.text.len() - 2) {
                                 writer.push(' ');
                             }
                         }
                         // FIXME: fix missing EOI
-                        Rule::LineTerminator => {
-                            add_sourcemap(t.col);
+                        Token::LineTerminator(t) => {
+                            add_sourcemap(t.col, t.line, t.col);
                             first_lt_after_region_open = false;
                             *dst_line += 1;
-                            writer.push_str("\n");
+                            writer.push('\n');
                         }
-                        _ => {
-                            add_sourcemap(t.col);
-                            writer.push_str(t.text.as_str());
+                        Token::Common(t) => {
+                            add_sourcemap(t.col, t.line, t.col);
+                            writer.push_str(&t.text);
                         }
+                        _ => unreachable!(),
                     }
                 }
             }
