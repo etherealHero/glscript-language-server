@@ -3,22 +3,26 @@ SourceFile  =  { _expression* }
 _expression = _{ _tracked | Untracked }
 
 _tracked  = _{ _includeStatement | _region | Regex | _stringLiteral | _comment | LineTerminator }
-Untracked =  { (!(_trackedStart | PlaceholderCloseBracket) ~ ANY)+ | (!(_trackedStart) ~ ANY) }
-// .                              ^fix nested stmt
+Untracked =  { (!(_tracked | PlaceholderCloseBracket) ~ ANY)+ | (!(_tracked) ~ ANY) }
+// .                         ^fix nested stmt
 
-_trackedStart = _{
+/*
+    // TODO: split parser by lexer -> parser
+    // FIXME: missing backtracking emit pairs on fail complex rules
+    _trackedStart = _{
     "import"
-  | "#include"
-  | "#text"
-  | "#sql"
-  | "#end"
-  | "\""
-  | "'"
-  | "`"
-  | "/"
-  | "\n"
-  | "\r"
-}
+    | "#include"
+    | "#text"
+    | "#sql"
+    | "#end"
+    | "\""
+    | "'"
+    | "`"
+    | "/"
+    | "\n"
+    | "\r"
+    }
+*/
 
 LineTerminator    =  { "\n" | "\r\n" | "\r" }
 WhiteSpace        =  { (" " | "\t")+ }
