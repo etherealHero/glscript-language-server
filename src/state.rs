@@ -3,165 +3,38 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use crate::builder::Build;
-use crate::parser::{Token, parse};
-use crate::proxy::PROXY_WORKSPACE;
+use crate::parser::parse;
+use crate::proxy::{Canonicalize, PROXY_WORKSPACE};
+use crate::types::{
+    BuildWithVersion, Document, DocumentDeclarationStatement, DocumentIdentifier,
+    DocumentLinkStatement, Source, SourceHash,
+};
 
 use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
 use dashmap::DashMap;
 use ropey::Rope;
-use sha2::{Digest, Sha256};
-
-#[derive(Clone, Debug)]
-pub struct BuildWithVersion {
-    pub build: Arc<Build>,
-    pub version: i32,
-}
-
-#[derive(Debug, Clone)]
-pub struct Document {
-    pub ident: Arc<DocumentIdentifier>,
-    pub tokens: Arc<Vec<Token>>,
-    pub source: Arc<Source>,
-    pub path: Arc<PathBuf>,
-    pub hash: DocumentHash,
-    pub decl_stmt: Arc<DocumentDeclStmt>,
-    pub link_stmt: Arc<DocumentLinkStmt>,
-    buffer: Arc<Rope>,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct DocumentHash(u64);
-
-/// compatibility ECMAScript identifier hash from [`Source`]
-#[derive(Debug, Clone)]
-pub struct DocumentIdentifier(String);
-
-impl DocumentIdentifier {
-    pub fn new(source: &Source) -> Self {
-        let digest = Sha256::digest(source.as_bytes());
-        let hex = hex::encode(digest);
-        Self(format!("{:_<width$}", hex, width = source.len()))
-    }
-}
-
-impl std::ops::Deref for DocumentIdentifier {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::Deref for DocumentHash {
-    type Target = u64;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-pub const IDENTIFIER_PREFIX: &'static str = "$MODULE_";
-const DECL_START_STMT: &'static str = "/** @typedef";
-const LINK_START_STMT: &'static str = "/** {@link ";
-
-#[derive(Debug, Clone)]
-pub struct DocumentDeclStmt(String);
-
-impl DocumentDeclStmt {
-    /// returns module declaration statement:
-    /// ```js
-    /// /** @typedef {'%source%'} %identifier% */{};\n
-    /// ```
-    fn new(source: &Source, identifier: &DocumentIdentifier) -> Self {
-        let mut stmt = String::from(DECL_START_STMT);
-        stmt.push_str(DECL_START_STMT);
-        stmt.push_str(" {'");
-        stmt.push_str(source);
-        stmt.push_str("'} ");
-        stmt.push_str(IDENTIFIER_PREFIX);
-        stmt.push_str(identifier);
-        stmt.push_str(" */{};\n");
-        Self(stmt)
-    }
-}
-
-impl std::ops::Deref for DocumentDeclStmt {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DocumentLinkStmt {
-    pub left_offset: u32,
-    pub right_offset: u32,
-    stmt: String,
-}
-
-impl From<&DocumentIdentifier> for DocumentLinkStmt {
-    /// returns module link statement:
-    /// ```js
-    /// \n/** {@link %identifier%} */{};\n\n
-    /// ```
-    fn from(ident: &DocumentIdentifier) -> Self {
-        let left_offset = LINK_START_STMT.len() as u32;
-        let right_offset = left_offset + IDENTIFIER_PREFIX.len() as u32 + ident.len() as u32;
-        let mut stmt = String::from("\n");
-
-        stmt.push_str(LINK_START_STMT);
-        stmt.push_str(IDENTIFIER_PREFIX);
-        stmt.push_str(ident);
-        stmt.push_str("} */{};\n\n");
-
-        Self {
-            stmt,
-            left_offset,
-            right_offset,
-        }
-    }
-}
-
-impl std::ops::Deref for DocumentLinkStmt {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        &self.stmt
-    }
-}
 
 #[derive(Default, Debug)]
 pub struct State {
-    project_path: Arc<OnceLock<SourcePath>>,
+    project_path: Arc<OnceLock<PathBuf>>,
     documents: DashMap<PathBuf, Document>,
-    builds: DashMap<SourcePath, BuildWithVersion>,
-    uri_to_path: DashMap<Uri, SourcePath>,
+    builds: DashMap<PathBuf, BuildWithVersion>,
+
+    uri_to_path: DashMap<Uri, PathBuf>,
     path_resolver_cache: DashMap<(PathBuf, String), Arc<PathBuf>>,
-}
-
-// TODO: after resolve deprecated move to Struct typings (no alias)
-pub type SourcePath = PathBuf;
-pub type Source = String;
-
-pub trait Canonicalize {
-    fn canonicalize(&self) -> Self;
-}
-
-impl Canonicalize for Uri {
-    fn canonicalize(&self) -> Self {
-        // TODO: check if self.to_file_path() is enough because its uses ever for PartialEq cases
-        Uri::from_file_path(self.to_file_path().expect("valid filepath")).expect("valid filepath")
-    }
 }
 
 /// State of client buffers
 impl State {
     pub fn set_doc(&self, source_uri: &Uri, changes: &[lsp::TextDocumentContentChangeEvent]) {
         let path_uri = self.uri_to_path(source_uri).unwrap();
-        let (source, ident, hash, decl_stmt, link_stmt, path, buffer) = {
+        let (source, ident, source_hash, decl_stmt, link_stmt, path, buffer) = {
             if let Some(d) = self.documents.get(&path_uri) {
                 (
                     Some(d.source.clone()),
-                    Some(d.ident.clone()),
-                    Some(d.hash.clone()),
+                    Some(d.source_ident.clone()),
+                    Some(d.source_hash.clone()),
                     Some(d.decl_stmt.clone()),
                     Some(d.link_stmt.clone()),
                     Some(d.path.clone()),
@@ -176,24 +49,27 @@ impl State {
             let source = &path_uri.strip_prefix(self.get_project()).unwrap().to_str();
             let source = source.ok_or(anyhow::anyhow!("existed source of project"));
             let source = source.unwrap().to_lowercase().replace('\\', "/");
-            source.into()
+            Source::new(source).into()
         });
 
         let ident = ident.unwrap_or(DocumentIdentifier::new(&source).into());
-        let hash = hash.unwrap_or(DocumentHash(fxhash::hash64(&*source)).into());
+        let source_hash = source_hash.unwrap_or(SourceHash::new(&source).into());
         let path = path.unwrap_or(path_uri.clone().into());
-        let decl_stmt = decl_stmt.unwrap_or(DocumentDeclStmt::new(&source, &ident).into());
-        let link_stmt = link_stmt.unwrap_or(DocumentLinkStmt::from(&*ident).into());
+        let decl_stmt =
+            decl_stmt.unwrap_or(DocumentDeclarationStatement::new(&source, &ident).into());
+        let link_stmt = link_stmt.unwrap_or(DocumentLinkStatement::from(&*ident).into());
         let mut buffer = buffer.unwrap_or(Rope::new());
         let insert_doc = |p: PathBuf, text: &str, buffer: Rope| {
+            let tokens = parse(text);
             let doc = Document {
-                tokens: parse(text).into(),
+                dependency_hash: (&tokens).into(),
+                tokens: tokens.into(),
                 buffer: buffer.into(),
                 decl_stmt,
                 link_stmt,
                 source,
-                ident,
-                hash,
+                source_ident: ident,
+                source_hash,
                 path,
             };
             self.documents.insert(p, doc)
@@ -282,7 +158,7 @@ impl State {
     }
 
     /// returns SourcePath for canonicalize interface
-    pub fn get_builds_contains_source(&self, source: &Source) -> Vec<SourcePath> {
+    pub fn get_builds_contains_source(&self, source: &Source) -> Vec<PathBuf> {
         self.builds
             .iter()
             .filter(|e| e.value().build.sources().contains(source))
@@ -298,7 +174,7 @@ impl State {
         self.project_path.set(sp).expect("project set once");
     }
 
-    pub fn get_project(&self) -> &SourcePath {
+    pub fn get_project(&self) -> &PathBuf {
         self.project_path.get().expect("project installed")
     }
 

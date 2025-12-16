@@ -2,6 +2,7 @@ use futures::future::BoxFuture;
 use std::sync::{Arc, OnceLock};
 use tower::ServiceBuilder;
 
+use async_lsp::lsp_types::Url as Uri;
 use async_lsp::lsp_types::request::Request;
 use async_lsp::router::Router;
 use async_lsp::{ClientSocket, ResponseError, ServerSocket};
@@ -16,6 +17,16 @@ pub const PROXY_WORKSPACE: &'static str = "./.local/gls-proxy-workspace";
 pub type ResFut<R> = BoxFuture<'static, Result<<R as Request>::Result, ResponseError>>;
 pub type ResReq<R> = Result<<R as Request>::Result, async_lsp::Error>;
 pub type ResReqProxy<R> = Result<<R as Request>::Result, ResponseError>;
+
+pub trait Canonicalize {
+    fn canonicalize(&self) -> Self;
+}
+
+impl Canonicalize for Uri {
+    fn canonicalize(&self) -> Self {
+        Uri::from_file_path(self.to_file_path().unwrap()).unwrap()
+    }
+}
 
 #[derive(Default, Clone)]
 pub struct Proxy {

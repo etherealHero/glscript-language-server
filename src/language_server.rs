@@ -9,9 +9,9 @@ use async_lsp::{ErrorCode, ResponseError};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::{BUILD_FILE, Build};
-use crate::state::{Canonicalize, IDENTIFIER_PREFIX};
+use crate::types::{IDENTIFIER_PREFIX, Source};
 
-use crate::proxy::{DECL_FILE_EXT, JS_LANG_ID, PROXY_WORKSPACE};
+use crate::proxy::{Canonicalize, DECL_FILE_EXT, JS_LANG_ID, PROXY_WORKSPACE};
 use crate::proxy::{Proxy, ResFut, ResReq, ResReqProxy};
 
 use std::collections::HashSet;
@@ -117,7 +117,7 @@ impl LanguageServer for Proxy {
         let mut builds_for_changes = self.state.get_builds_contains_source(&doc.source);
         builds_for_changes.sort_by(|a, b| (*a != *doc.path).cmp(&(*b != *doc.path)));
 
-        let mut sources_changed = false;
+        let mut dependency_changed = false;
 
         assert_eq!(builds_for_changes.first(), Some(&*doc.path));
 
@@ -137,14 +137,14 @@ impl LanguageServer for Proxy {
                         range_length: change.range_length,
                         text: change.text.replace("\r\n", "\n"),
                     }),
-                    None => sources_changed = true, // FIXME: find exception cases
+                    None => dependency_changed = true, // FIXME: find exception cases
                 };
             }
 
             let new_build_with_version = self.state.set_build(build_uri);
 
-            if new_build_with_version.build.emit_hash != build.emit_hash {
-                sources_changed = true;
+            if new_build_with_version.build.dependency_hash() != build.dependency_hash() {
+                dependency_changed = true;
             }
 
             let forward_params = lsp::DidChangeTextDocumentParams {
@@ -152,7 +152,7 @@ impl LanguageServer for Proxy {
                     uri: new_build_with_version.build.emit_uri.clone(),
                     version: new_build_with_version.version,
                 },
-                content_changes: if sources_changed {
+                content_changes: if dependency_changed {
                     vec![lsp::TextDocumentContentChangeEvent {
                         text: new_build_with_version.build.emit_text.clone(),
                         range_length: None,
@@ -207,7 +207,7 @@ impl LanguageServer for Proxy {
         };
 
         // TODO: send cancel req on timeout
-        let source = self.state.get_doc(uri).unwrap().source.clone();
+        let req_source = self.state.get_doc(uri).unwrap().source.clone();
         let decl_req = self.definition(lsp::GotoDefinitionParams {
             text_document_position_params: lsp::TextDocumentPositionParams::new(
                 lsp::TextDocumentIdentifier::new(uri.clone()),
@@ -219,11 +219,10 @@ impl LanguageServer for Proxy {
 
         Box::pin(async move {
             let uri = &mut params.text_document_position_params.text_document.uri;
-            let uri_canonicalized = uri.canonicalize();
             let pos = &mut params.text_document_position_params.position;
 
             // TODO: create util
-            let build_pos = build.forward_src_position(pos, &source);
+            let build_pos = build.forward_src_position(pos, &req_source);
 
             if build_pos.is_none() {
                 let err = format!("Forward src position `{pos:?}` failed");
@@ -243,9 +242,7 @@ impl LanguageServer for Proxy {
             let mut hover = strip_module_hash(hover.expect("is some"));
 
             if let Some(mut r) = hover.range {
-                if !forward_build_range(&mut r, &build)
-                    .is_ok_and(|source_uri| source_uri.canonicalize() == uri_canonicalized)
-                {
+                if !forward_build_range(&mut r, &build).is_ok_and(|source| source == *req_source) {
                     hover.range = None
                 }
             }
@@ -322,16 +319,15 @@ impl LanguageServer for Proxy {
                     }
 
                     if let Some(ref any_build) = state.get_build_by_emit_uri(&link.target_uri) {
-                        let source_uri = forward_build_range(&mut link.target_range, any_build)?;
-                        let source = &*state.get_doc(&source_uri).unwrap().source;
+                        let source = forward_build_range(&mut link.target_range, any_build)?;
 
-                        if !req_build_sources.contains(source) {
+                        if !req_build_sources.contains(&source) {
                             continue;
                         }
 
                         forward_build_range(&mut link.target_selection_range, any_build)?;
 
-                        link.target_uri = source_uri;
+                        link.target_uri = source.to_uri(&state).unwrap();
                         link.origin_selection_range = None;
                         forward_links.insert(HashLocationLink(link));
                         continue;
@@ -418,7 +414,7 @@ impl LanguageServer for Proxy {
 type DefRes = lsp::GotoDefinitionResponse;
 
 #[inline]
-fn forward_build_range(range: &mut lsp::Range, build: &Build) -> Result<Uri, ResponseError> {
+fn forward_build_range(range: &mut lsp::Range, build: &Build) -> Result<Source, ResponseError> {
     let source_range = build.forward_build_range(&range);
     if source_range.is_none() {
         let err = format!("Forward back build range `{:?}` failed", range);

@@ -1,0 +1,238 @@
+use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use async_lsp::lsp_types::Url as Uri;
+use derive_more::{Deref, From, Into};
+use sha2::{Digest, Sha256};
+
+use crate::builder::Build;
+use crate::parser::Token;
+use crate::state::State;
+
+#[derive(Clone, Debug)]
+pub struct BuildWithVersion {
+    pub build: Arc<Build>,
+    pub version: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Document {
+    pub path: Arc<PathBuf>,
+
+    pub source: Arc<Source>,
+    pub source_ident: Arc<DocumentIdentifier>,
+    pub source_hash: SourceHash,
+
+    pub tokens: Arc<Vec<Token>>,
+    pub dependency_hash: DependencyHash,
+    pub buffer: Arc<ropey::Rope>,
+
+    pub decl_stmt: Arc<DocumentDeclarationStatement>,
+    pub link_stmt: Arc<DocumentLinkStatement>,
+}
+
+/**
+ * Source
+ */
+
+#[derive(Debug, Eq, PartialEq, Hash, Clone, From, Into, Deref)]
+pub struct Source(String);
+
+impl Source {
+    // TODO: refactor with from IncludeToken, SourceMap::Token, LSP Uri
+    pub fn new(raw_source: String) -> Self {
+        Self(raw_source)
+    }
+
+    pub fn to_uri(&self, st: &State) -> anyhow::Result<Uri> {
+        let source_uri = Uri::from_file_path(st.get_project().join(&self.0))
+            .map_err(|_| anyhow::Error::msg("invalid source"))?;
+
+        Ok(source_uri)
+    }
+}
+
+/**
+ * DependencyHash
+ */
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deref)]
+pub struct DependencyHash(u64);
+
+impl From<&Vec<Token>> for DependencyHash {
+    fn from(tokens: &Vec<Token>) -> Self {
+        let ref mut hasher = fxhash::FxHasher64::default();
+
+        for t in tokens {
+            match t {
+                Token::IncludePath(raw_span) => {
+                    raw_span.col.hash(hasher);
+                    raw_span.line.hash(hasher);
+                    raw_span.text.hash(hasher);
+                }
+                _ => {}
+            }
+        }
+
+        Self(hasher.finish())
+    }
+}
+
+impl From<&Vec<DependencyHash>> for DependencyHash {
+    fn from(hashes: &Vec<DependencyHash>) -> Self {
+        let ref mut hasher = fxhash::FxHasher64::default();
+        hashes.iter().for_each(|h| h.hash(hasher));
+        Self(hasher.finish())
+    }
+}
+
+/**
+ * SourceHash
+ */
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deref)]
+pub struct SourceHash(u64);
+
+impl SourceHash {
+    pub fn new(source: &Source) -> Self {
+        Self(fxhash::hash64(&**source))
+    }
+}
+
+/**
+ * DocumentIdentifier
+ */
+
+/// compatibility ECMAScript identifier hash from [`S ource`]
+#[derive(Debug, Clone, Deref)]
+pub struct DocumentIdentifier(Source);
+
+impl DocumentIdentifier {
+    pub fn new(source: &Source) -> Self {
+        let digest = Sha256::digest(source.as_bytes());
+        let hex = hex::encode(digest);
+        Self(format!("{:_<width$}", hex, width = source.len()).into())
+    }
+}
+
+/**
+ * Statements
+ */
+pub const IDENTIFIER_PREFIX: &'static str = "$MODULE_";
+
+/**
+ * DocumentDeclarationStatement
+ */
+
+#[derive(Debug, Clone, Deref)]
+pub struct DocumentDeclarationStatement(String);
+
+impl DocumentDeclarationStatement {
+    /// returns module declaration statement:
+    /// ```js
+    /// /** @typedef {'%source%'} %identifier% */{};\n
+    /// ```
+    pub fn new(source: &Source, identifier: &DocumentIdentifier) -> Self {
+        const DECL_START_STMT: &'static str = "/** @typedef";
+        let mut stmt = String::from(DECL_START_STMT);
+        stmt.push_str(DECL_START_STMT);
+        stmt.push_str(" {'");
+        stmt.push_str(source);
+        stmt.push_str("'} ");
+        stmt.push_str(IDENTIFIER_PREFIX);
+        stmt.push_str(identifier);
+        stmt.push_str(" */{};\n");
+        Self(stmt)
+    }
+}
+
+/**
+ * DocumentLinkStatement
+ */
+
+#[derive(Debug, Clone)]
+pub struct DocumentLinkStatement {
+    pub left_offset: u32,
+    pub right_offset: u32,
+    stmt: String,
+}
+
+impl From<&DocumentIdentifier> for DocumentLinkStatement {
+    /// returns module link statement:
+    /// ```js
+    /// \n/** {@link %identifier%} */{};\n\n
+    /// ```
+    fn from(ident: &DocumentIdentifier) -> Self {
+        const LINK_START_STMT: &'static str = "/** {@link ";
+        let left_offset = LINK_START_STMT.len() as u32;
+        let right_offset = left_offset + IDENTIFIER_PREFIX.len() as u32 + ident.len() as u32;
+        let mut stmt = String::from("\n");
+
+        stmt.push_str(LINK_START_STMT);
+        stmt.push_str(IDENTIFIER_PREFIX);
+        stmt.push_str(ident);
+        stmt.push_str("} */{};\n\n");
+
+        Self {
+            stmt,
+            left_offset,
+            right_offset,
+        }
+    }
+}
+
+impl std::ops::Deref for DocumentLinkStatement {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        &self.stmt
+    }
+}
+
+/**
+ * PendingMap
+ */
+
+pub struct PendingMap {
+    dst_line: u32,
+    dst_col: u32,
+    src_line: u32,
+    src_col: u32,
+    source: Option<Arc<Source>>,
+}
+
+impl PendingMap {
+    pub fn new(
+        dst_line: u32,
+        dst_col: u32,
+        src_line: u32,
+        src_col: u32,
+        source: Option<Arc<Source>>,
+    ) -> Self {
+        Self {
+            dst_line,
+            dst_col,
+            src_line,
+            src_col,
+            source,
+        }
+    }
+
+    pub fn into_sourcemap(maps: &Vec<PendingMap>) -> sourcemap::SourceMap {
+        let mut smb = sourcemap::SourceMapBuilder::new(None);
+
+        for m in maps {
+            smb.add(
+                m.dst_line,
+                m.dst_col,
+                m.src_line,
+                m.src_col,
+                m.source.as_ref().map(|v| &*v.as_str()),
+                None,
+                false,
+            );
+        }
+
+        smb.into_sourcemap()
+    }
+}
