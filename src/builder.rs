@@ -300,6 +300,7 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                     }
                     Token::CommonWithLineBreak(t) => {
                         add_sourcemap(t.col, t.line, t.col);
+                        first_lt_after_region_open = false;
                         ctx.line();
                         ctx.push_str(&t.text);
                     }
