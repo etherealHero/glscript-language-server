@@ -102,9 +102,10 @@ impl LanguageServer for Proxy {
     #[tracing::instrument(skip(self, params))]
     fn did_change(&mut self, params: lsp::DidChangeTextDocumentParams) -> Self::NotifyResult {
         let uri = &params.text_document.uri;
+        let mut service = self.server();
 
         if self.state.get_build(uri).is_none() {
-            let _ = self.server().did_change(params);
+            let _ = service.did_change(params);
             return ControlFlow::Continue(());
         }
 
@@ -163,11 +164,10 @@ impl LanguageServer for Proxy {
                 },
             };
 
-            // FIXME: too long on many buffers, change to dirty builds & update stack on idle
-            // find lsp req or notify triggered on current client buffer for detect actual build
-            let _ = self.server().did_change(forward_params);
+            self.state.pending_build_changes(build_uri, forward_params);
         }
 
+        self.state.commit_build_changes(uri, &mut service);
         ControlFlow::Continue(())
     }
 
@@ -179,11 +179,13 @@ impl LanguageServer for Proxy {
     }
 
     fn did_close(&mut self, params: lsp::DidCloseTextDocumentParams) -> Self::NotifyResult {
-        match self.state.get_build(&params.text_document.uri) {
+        let uri = &params.text_document.uri;
+        match self.state.get_build(uri) {
             Some(b) => {
                 let _ = self.server().did_close(lsp::DidCloseTextDocumentParams {
                     text_document: lsp::TextDocumentIdentifier::new(b.emit_uri.clone()),
                 });
+                self.state.remove_build(uri);
             }
             None => self.server().did_close(params).expect("did close"),
         }
@@ -195,6 +197,7 @@ impl LanguageServer for Proxy {
         let uri = &params.text_document_position_params.text_document.uri;
         let pos = &params.text_document_position_params.position;
 
+        // TODO: create util
         let build: Arc<Build>;
         match self.state.get_build(uri) {
             None => {
@@ -205,6 +208,8 @@ impl LanguageServer for Proxy {
             }
             Some(b) => build = b,
         };
+
+        self.state.commit_build_changes(uri, &mut service);
 
         // TODO: send cancel req on timeout
         let req_source = self.state.get_doc(uri).unwrap().source.clone();
@@ -266,6 +271,7 @@ impl LanguageServer for Proxy {
         let mut service = self.server();
         let uri = &params.text_document_position_params.text_document.uri;
 
+        // TODO: create util
         let req_build: Arc<Build>;
         match self.state.get_build(uri) {
             None => {
@@ -276,6 +282,8 @@ impl LanguageServer for Proxy {
             }
             Some(b) => req_build = b,
         };
+
+        self.state.commit_build_changes(uri, &mut service);
 
         let req_build_sources = req_build.sources();
         let state = self.state.clone();
@@ -408,6 +416,13 @@ impl LanguageServer for Proxy {
 
         let _ = self.server().did_change_watched_files(params);
         ControlFlow::Continue(())
+    }
+
+    fn code_lens(&mut self, params: lsp::CodeLensParams) -> ResFut<R::CodeLensRequest> {
+        let mut service = self.server();
+        let uri = params.text_document.uri;
+        self.state.commit_build_changes(&uri, &mut service);
+        Box::pin(async move { Ok(Some(vec![])) })
     }
 }
 

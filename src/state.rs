@@ -10,8 +10,8 @@ use crate::types::{
     DocumentLinkStatement, Source, SourceHash,
 };
 
-use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
+use async_lsp::{LanguageServer, ServerSocket, lsp_types as lsp};
 use dashmap::DashMap;
 use ropey::Rope;
 
@@ -20,6 +20,8 @@ pub struct State {
     project_path: Arc<OnceLock<PathBuf>>,
     documents: DashMap<PathBuf, Document>,
     builds: DashMap<PathBuf, BuildWithVersion>,
+
+    uncommitted_build_changes: DashMap<PathBuf, Vec<lsp::DidChangeTextDocumentParams>>,
 
     uri_to_path: DashMap<Uri, PathBuf>,
     path_resolver_cache: DashMap<(PathBuf, String), Arc<PathBuf>>,
@@ -149,6 +151,12 @@ impl State {
             .map(|guard| guard.build.clone())
     }
 
+    pub fn remove_build(&self, source_uri: &Uri) {
+        let path = &self.uri_to_path(source_uri).unwrap();
+        self.builds.remove(path);
+        self.uncommitted_build_changes.remove(path);
+    }
+
     pub fn get_build_by_emit_uri(&self, emit_uri: &Uri) -> Option<Arc<Build>> {
         let emit_uri_canonicalized = emit_uri.canonicalize();
         self.builds
@@ -164,6 +172,35 @@ impl State {
             .filter(|e| e.value().build.sources().contains(source))
             .map(|e| e.key().clone())
             .collect()
+    }
+
+    pub fn pending_build_changes(
+        &self,
+        source_uri: &Uri,
+        changes: lsp::DidChangeTextDocumentParams,
+    ) {
+        let path = self.uri_to_path(source_uri).unwrap();
+        self.uncommitted_build_changes
+            .entry(path)
+            .and_modify(|c| c.push(changes.to_owned()))
+            .or_insert(vec![changes]);
+    }
+
+    pub fn commit_build_changes(&self, source_uri: &Uri, service: &mut ServerSocket) {
+        let path = match self.uri_to_path(source_uri) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        if let Some((_, changes)) = self.uncommitted_build_changes.remove(&path) {
+            tracing::info!(
+                "commit_build_changes {}",
+                source_uri.as_str().split("/").last().unwrap()
+            );
+            for change in changes {
+                let _ = service.did_change(change);
+            }
+        }
     }
 }
 

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_lsp::lsp_types::Url as Uri;
-use derive_more::{Deref, From, Into};
+use derive_more::{Deref, Display, From, Into};
 use sha2::{Digest, Sha256};
 
 use crate::builder::Build;
@@ -36,7 +36,7 @@ pub struct Document {
  * Source
  */
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone, From, Into, Deref)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, From, Into, Deref, Display)]
 pub struct Source(String);
 
 impl Source {
