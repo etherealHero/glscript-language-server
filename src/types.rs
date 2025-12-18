@@ -67,8 +67,8 @@ impl From<&Vec<Token>> for DependencyHash {
         for t in tokens {
             match t {
                 Token::IncludePath(raw_span) => {
-                    raw_span.col.hash(hasher);
-                    raw_span.line.hash(hasher);
+                    raw_span.pos.col.hash(hasher);
+                    raw_span.pos.line.hash(hasher);
                     raw_span.text.hash(hasher);
                 }
                 _ => {}
@@ -218,11 +218,12 @@ impl PendingMap {
         }
     }
 
-    pub fn into_sourcemap(maps: &Vec<PendingMap>) -> sourcemap::SourceMap {
-        let mut smb = sourcemap::SourceMapBuilder::new(None);
+    pub fn into_sourcemap(maps: &Vec<PendingMap>, state: &State) -> sourcemap::SourceMap {
+        type SrcId = u32;
 
-        for m in maps {
-            smb.add(
+        let mut smb = sourcemap::SourceMapBuilder::new(None);
+        let add = |smb: &mut sourcemap::SourceMapBuilder, m: &PendingMap| -> SrcId {
+            let t = smb.add(
                 m.dst_line,
                 m.dst_col,
                 m.src_line,
@@ -231,6 +232,34 @@ impl PendingMap {
                 None,
                 false,
             );
+
+            t.src_id
+        };
+
+        #[cfg(debug_assertions)]
+        {
+            let project = state.get_project();
+            let mut sources = std::collections::HashMap::<u32, Arc<Source>>::new();
+
+            for m in maps {
+                let src_id = add(&mut smb, m);
+                if let (Some(source), false) = (&m.source, sources.contains_key(&src_id)) {
+                    sources.insert(src_id, source.clone());
+                }
+            }
+
+            for (src_id, source) in sources {
+                let ref doc_uri = Uri::from_file_path(project.join(source.as_str())).unwrap();
+                let ref contents = state.get_doc(doc_uri).unwrap().buffer.to_string();
+                smb.set_source_contents(src_id, Some(contents));
+            }
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            for m in maps {
+                add(&mut smb, m);
+            }
         }
 
         smb.into_sourcemap()

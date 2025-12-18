@@ -5,15 +5,12 @@ use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
 use sourcemap::SourceMap;
 
-use crate::parser::Token;
+use crate::parser::{Position, Token};
 use crate::proxy::PROXY_WORKSPACE;
 use crate::state::State;
 use crate::types::{DependencyHash, DocumentIdentifier, PendingMap, Source, SourceHash};
 
 pub const BUILD_FILE: &'static str = "build.js.emitted";
-
-#[cfg(debug_assertions)]
-pub const BUILD_SOURCEMAP_FILE: &'static str = "build.js.emitted.map";
 
 #[derive(Clone, Debug)]
 pub struct Build {
@@ -108,7 +105,7 @@ impl Build {
 }
 
 impl Build {
-    #[tracing::instrument(skip(state, uri, prev_build))]
+    #[tracing::instrument(skip_all, fields( doc = uri.as_str().split("/").last().unwrap() ))]
     pub fn new(state: &State, uri: &Uri, prev_build: Option<Arc<Self>>) -> anyhow::Result<Self> {
         let (ref mut pending_maps, dependency_hash, emit_buffer) = {
             if let Some(pb) = prev_build {
@@ -134,20 +131,20 @@ impl Build {
 
         emit(&mut ctx, uri)?;
 
-        let source_map = PendingMap::into_sourcemap(ctx.pending_maps);
+        let source_map = PendingMap::into_sourcemap(ctx.pending_maps, state);
 
         #[cfg(debug_assertions)]
         {
-            let p = state.get_project();
+            use base64::prelude::{BASE64_STANDARD, Engine as _};
+
             let mut sm_json = Vec::new();
             let _ = source_map.to_writer(&mut sm_json);
-            let emitted_source_map = String::from_utf8(sm_json)?;
-            let _ = std::fs::write(p.join(BUILD_SOURCEMAP_FILE), emitted_source_map);
+            let sm_base64 = BASE64_STANDARD.encode(&sm_json);
             let build = format!(
-                "{}\n//# sourceMappingURL=/{BUILD_SOURCEMAP_FILE}",
-                &ctx.emit_buffer
+                "{}\n//# sourceMappingURL=data:application/json;base64,{}",
+                &ctx.emit_buffer, sm_base64
             );
-            let _ = std::fs::write(p.join(BUILD_FILE), build);
+            let _ = std::fs::write(state.get_project().join(BUILD_FILE), build);
         }
 
         // FIXME: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
@@ -225,15 +222,29 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
     ctx.map(0, 0, 0, Some(source.clone()));
     ctx.line();
 
-    let mut skip_lt_after_region_open = false;
-    let mut first_lt_after_region_open = false;
-    let mut first_lt_after_region_open_offset = 0;
+    let mut lt_ro_skip = false;
+    let mut lt_ro = false;
+    let mut lt_ro_offset = 0;
+    let add_sourcemap =
+        |dst_col: u32, pos: &Position, ctx: &mut EmitCtx<'_>, lt_ro: bool, lt_ro_offset: u32| {
+            let source = Some(source.clone());
+            let dst_col = match lt_ro {
+                true => dst_col + lt_ro_offset,
+                false => dst_col,
+            };
+            ctx.map(dst_col, pos.line, pos.col, source);
+        };
 
     for t in tokens {
         match t {
-            Token::Include => {}
+            Token::Include(t) => {
+                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
+                for _ in 0..t.len {
+                    ctx.push(' ');
+                }
+            }
             Token::IncludePath(t) => {
-                let (line, col) = (t.line, t.col);
+                let (line, col) = (t.pos.line, t.pos.col);
                 let dep_lit = t.text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
                 let dep_path = ctx.state.path_resolver(&path, dep_lit);
                 let dep_uri = &Uri::from_file_path(dep_path.as_path()).unwrap();
@@ -253,63 +264,52 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 ctx.line();
                 ctx.line();
 
-                // TODO: if err ? should emit blk ?
                 let _ = emit(ctx, dep_uri);
                 for _ in 0..(col + t.text.len() as u32) {
                     ctx.push(' ');
                 }
             }
-            _ => {
-                let mut add_sourcemap = |dst_col: u32, line: u32, col: u32| {
-                    let source = Some(source.clone());
-                    let dst_col = match first_lt_after_region_open {
-                        true => dst_col + first_lt_after_region_open_offset,
-                        false => dst_col,
-                    };
-                    ctx.map(dst_col, line, col, source);
-                };
-
-                match t {
-                    Token::LineTerminator(_) if skip_lt_after_region_open => {
-                        skip_lt_after_region_open = false;
-                        first_lt_after_region_open = true;
-                    }
-                    Token::RegionOpen(t) => {
-                        add_sourcemap(0, t.line, t.col);
-                        skip_lt_after_region_open = true;
-                        first_lt_after_region_open_offset = t.text.len() as u32;
-                        for _ in 0..(t.text.len() - 1) {
-                            ctx.push(' ');
-                        }
-                        ctx.push('`');
-                    }
-                    Token::RegionClose(t) => {
-                        add_sourcemap(0, t.line, t.col);
-                        ctx.push('`');
-                        ctx.push(';');
-                        for _ in 0..(t.text.len() - 2) {
-                            ctx.push(' ');
-                        }
-                    }
-                    // FIXME: fix missing EOI
-                    Token::LineTerminator(t) => {
-                        add_sourcemap(t.col, t.line, t.col);
-                        first_lt_after_region_open = false;
-                        ctx.line();
-                        ctx.push('\n');
-                    }
-                    Token::CommonWithLineBreak(t) => {
-                        add_sourcemap(t.col, t.line, t.col);
-                        first_lt_after_region_open = false;
-                        ctx.line();
-                        ctx.push_str(&t.text);
-                    }
-                    Token::Common(t) => {
-                        add_sourcemap(t.col, t.line, t.col);
-                        ctx.push_str(&t.text);
-                    }
-                    _ => unreachable!(),
+            Token::RegionOpen(t) => {
+                add_sourcemap(0, &t.pos, ctx, lt_ro, lt_ro_offset);
+                lt_ro_skip = true;
+                lt_ro_offset = t.len as u32;
+                for _ in 0..(t.len - 1) {
+                    ctx.push(' ');
                 }
+                ctx.push('`');
+            }
+            Token::LineTerminator(_) if lt_ro_skip => {
+                lt_ro_skip = false;
+                lt_ro = true;
+            }
+            Token::RegionClose(t) => {
+                add_sourcemap(0, &t.pos, ctx, lt_ro, lt_ro_offset);
+                ctx.push('`');
+                ctx.push(';');
+                for _ in 0..(t.len - 2) {
+                    ctx.push(' ');
+                }
+            }
+            Token::LineTerminator(t) => {
+                add_sourcemap(t.col, t, ctx, lt_ro, lt_ro_offset);
+                lt_ro = false;
+                ctx.line();
+                ctx.push('\n');
+            }
+            Token::CommonWithLineBreak(t) => {
+                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
+                lt_ro = false;
+                ctx.line();
+                ctx.push_str(&t.text);
+            }
+            Token::Common(t) => {
+                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
+                ctx.push_str(&t.text);
+            }
+            Token::FinalNewLine(t) => {
+                add_sourcemap(0, &Position { line: *t, col: 0 }, ctx, lt_ro, lt_ro_offset);
+                ctx.line();
+                ctx.push('\n');
             }
         }
     }

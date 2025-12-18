@@ -224,8 +224,9 @@ impl State {
 }
 
 impl State {
+    /// returns caonnicalized path
     #[inline]
-    fn uri_to_path(&self, uri: &Uri) -> anyhow::Result<PathBuf> {
+    pub fn uri_to_path(&self, uri: &Uri) -> anyhow::Result<PathBuf> {
         if let Some(source_path) = self.uri_to_path.get(uri) {
             return Ok(source_path.clone());
         }

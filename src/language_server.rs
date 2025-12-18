@@ -350,7 +350,15 @@ impl LanguageServer for Proxy {
                         forward_links.insert(HashLocationLink(link));
                     }
                 }
-                let forward_links = forward_links.into_iter().map(|h| h.0).collect();
+                let forward_links = forward_links
+                    .into_iter()
+                    .map(|mut h| {
+                        if let Ok(path) = state.uri_to_path(&h.0.target_uri) {
+                            h.0.target_uri = Uri::from_file_path(path).unwrap();
+                        }
+                        h.0
+                    })
+                    .collect();
                 Ok(DefRes::Link(forward_links))
             };
 
@@ -388,20 +396,8 @@ impl LanguageServer for Proxy {
         for channge in params.changes {
             let is_build_file = !channge.uri.as_str().ends_with(BUILD_FILE);
             let is_build_dep = self.state.get_build(&channge.uri).is_some();
-            let is_sourcemap_file;
 
-            #[cfg(debug_assertions)]
-            {
-                use crate::builder::BUILD_SOURCEMAP_FILE;
-                is_sourcemap_file = !channge.uri.as_str().ends_with(BUILD_SOURCEMAP_FILE);
-            }
-
-            #[cfg(not(debug_assertions))]
-            {
-                is_sourcemap_file = false;
-            }
-
-            if is_build_file || is_sourcemap_file || is_build_dep {
+            if is_build_file || is_build_dep {
                 continue;
             }
 
