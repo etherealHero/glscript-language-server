@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_lsp::lsp_types::Url as Uri;
-use derive_more::{Deref, Display, From, Into};
+use derive_more::{Constructor, Deref, Display, From, Into};
 use sha2::{Digest, Sha256};
 
 use crate::builder::Build;
 use crate::parser::Token;
 use crate::state::State;
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Constructor)]
 pub struct BuildWithVersion {
     pub build: Arc<Build>,
     pub version: i32,
@@ -36,15 +36,11 @@ pub struct Document {
  * Source
  */
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone, From, Into, Deref, Display)]
+// TODO: refactor with from IncludeToken, SourceMap::Token, LSP Uri
+#[derive(Debug, Eq, PartialEq, Hash, Clone, From, Into, Deref, Display, Constructor)]
 pub struct Source(String);
 
 impl Source {
-    // TODO: refactor with from IncludeToken, SourceMap::Token, LSP Uri
-    pub fn new(raw_source: String) -> Self {
-        Self(raw_source)
-    }
-
     pub fn to_uri(&self, st: &State) -> anyhow::Result<Uri> {
         let source_uri = Uri::from_file_path(st.get_project().join(&self.0))
             .map_err(|_| anyhow::Error::msg("invalid source"))?;
@@ -131,12 +127,11 @@ pub struct DocumentDeclarationStatement(String);
 impl DocumentDeclarationStatement {
     /// returns module declaration statement:
     /// ```js
-    /// /** @typedef {'%source%'} %identifier% */{};\n
+    /// \n/** @typedef {'%source%'} %identifier% */{};\n
     /// ```
     pub fn new(source: &Source, identifier: &DocumentIdentifier) -> Self {
-        const DECL_START_STMT: &'static str = "/** @typedef";
+        const DECL_START_STMT: &'static str = "\n/** @typedef";
         let mut stmt = String::from(DECL_START_STMT);
-        stmt.push_str(DECL_START_STMT);
         stmt.push_str(" {'");
         stmt.push_str(source);
         stmt.push_str("'} ");
@@ -158,21 +153,23 @@ pub struct DocumentLinkStatement {
     stmt: String,
 }
 
-impl From<&DocumentIdentifier> for DocumentLinkStatement {
+impl DocumentLinkStatement {
     /// returns module link statement:
     /// ```js
-    /// \n/** {@link %identifier%} */{};\n\n
+    /// \n/** {@link %identifier%} */{};\n
     /// ```
-    fn from(ident: &DocumentIdentifier) -> Self {
+    pub fn new(source: &Source, identifier: &DocumentIdentifier) -> Self {
         const LINK_START_STMT: &'static str = "/** {@link ";
         let left_offset = LINK_START_STMT.len() as u32;
-        let right_offset = left_offset + IDENTIFIER_PREFIX.len() as u32 + ident.len() as u32;
+        let right_offset = left_offset + IDENTIFIER_PREFIX.len() as u32 + identifier.len() as u32;
         let mut stmt = String::from("\n");
 
         stmt.push_str(LINK_START_STMT);
         stmt.push_str(IDENTIFIER_PREFIX);
-        stmt.push_str(ident);
-        stmt.push_str("} */{};\n\n");
+        stmt.push_str(identifier);
+        stmt.push_str(" '");
+        stmt.push_str(source);
+        stmt.push_str("'} */{};\n");
 
         Self {
             stmt,
@@ -193,6 +190,7 @@ impl std::ops::Deref for DocumentLinkStatement {
  * PendingMap
  */
 
+#[derive(Constructor)]
 pub struct PendingMap {
     dst_line: u32,
     dst_col: u32,
@@ -202,23 +200,7 @@ pub struct PendingMap {
 }
 
 impl PendingMap {
-    pub fn new(
-        dst_line: u32,
-        dst_col: u32,
-        src_line: u32,
-        src_col: u32,
-        source: Option<Arc<Source>>,
-    ) -> Self {
-        Self {
-            dst_line,
-            dst_col,
-            src_line,
-            src_col,
-            source,
-        }
-    }
-
-    pub fn into_sourcemap(maps: &Vec<PendingMap>, state: &State) -> sourcemap::SourceMap {
+    pub fn into_sourcemap(maps: &Vec<PendingMap>, _state: &State) -> sourcemap::SourceMap {
         type SrcId = u32;
 
         let mut smb = sourcemap::SourceMapBuilder::new(None);
@@ -238,7 +220,7 @@ impl PendingMap {
 
         #[cfg(debug_assertions)]
         {
-            let project = state.get_project();
+            let project = _state.get_project();
             let mut sources = std::collections::HashMap::<u32, Arc<Source>>::new();
 
             for m in maps {
@@ -250,7 +232,7 @@ impl PendingMap {
 
             for (src_id, source) in sources {
                 let ref doc_uri = Uri::from_file_path(project.join(source.as_str())).unwrap();
-                let ref contents = state.get_doc(doc_uri).unwrap().buffer.to_string();
+                let ref contents = _state.get_doc(doc_uri).unwrap().buffer.to_string();
                 smb.set_source_contents(src_id, Some(contents));
             }
         }

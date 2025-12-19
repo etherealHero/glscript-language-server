@@ -59,7 +59,7 @@ impl State {
         let path = path.unwrap_or(path_uri.clone().into());
         let decl_stmt =
             decl_stmt.unwrap_or(DocumentDeclarationStatement::new(&source, &ident).into());
-        let link_stmt = link_stmt.unwrap_or(DocumentLinkStatement::from(&*ident).into());
+        let link_stmt = link_stmt.unwrap_or(DocumentLinkStatement::new(&source, &ident).into());
         let mut buffer = buffer.unwrap_or(Rope::new());
         let insert_doc = |p: PathBuf, text: &str, buffer: Rope| {
             let tokens = parse(text);
@@ -78,20 +78,20 @@ impl State {
         };
 
         if changes.len() == 1 && changes[0].range.is_none() {
-            let new_text = changes[0].text.replace("\r\n", "\n").replace("\r", "");
-            buffer = Rope::from_str(&new_text).into();
-            insert_doc(path_uri, &new_text, buffer);
+            let new_text = changes[0].text.as_str();
+            buffer = Rope::from_str(new_text).into();
+            insert_doc(path_uri, new_text, buffer);
             return;
         }
 
         for change in changes {
-            let r = change.range.as_ref().expect("expected incremental sync");
-            let text = change.text.replace("\r\n", "\n").replace("\r", "");
+            let r = change.range.as_ref().unwrap();
+            let text = change.text.as_str();
             let start = buffer.line_to_char(r.start.line as usize) + r.start.character as usize;
             let end = buffer.line_to_char(r.end.line as usize) + r.end.character as usize;
 
             buffer.remove(start..end);
-            buffer.insert(start, &text);
+            buffer.insert(start, text);
         }
 
         let full_text = buffer.to_string();
@@ -128,17 +128,14 @@ impl State {
 
         match self.builds.get_mut(path) {
             Some(mut b) => {
-                let new_build = Build::new(&self, source_uri, Some(b.build.clone())).unwrap();
+                let new_build = Build::create(&self, source_uri, Some(b.build.clone())).unwrap();
                 b.build = new_build.into();
                 b.version += 1;
             }
             None => {
-                let new_build = Build::new(&self, source_uri, None).unwrap();
-                let b = BuildWithVersion {
-                    build: new_build.into(),
-                    version: 1,
-                };
-                self.builds.insert(path.into(), b);
+                let new_build = Build::create(&self, source_uri, None).unwrap();
+                let build_with_version = BuildWithVersion::new(new_build.into(), 1);
+                self.builds.insert(path.into(), build_with_version);
             }
         }
 
@@ -146,9 +143,12 @@ impl State {
     }
 
     pub fn get_build(&self, source_uri: &Uri) -> Option<Arc<Build>> {
-        self.builds
-            .get(&self.uri_to_path(source_uri).unwrap())
-            .map(|guard| guard.build.clone())
+        let ref path = match self.uri_to_path(source_uri) {
+            Ok(p) => p,
+            Err(_) => return None,
+        };
+
+        self.builds.get(path).map(|guard| guard.build.clone())
     }
 
     pub fn remove_build(&self, source_uri: &Uri) {
@@ -193,10 +193,6 @@ impl State {
         };
 
         if let Some((_, changes)) = self.uncommitted_build_changes.remove(&path) {
-            tracing::info!(
-                "commit_build_changes {}",
-                source_uri.as_str().split("/").last().unwrap()
-            );
             for change in changes {
                 let _ = service.did_change(change);
             }
@@ -215,10 +211,9 @@ impl State {
         self.project_path.get().expect("project installed")
     }
 
-    // FIXME: if global doc invalid or not installed ? change with constant global.js file
-    pub fn get_global_doc(&self) -> Uri {
+    pub fn get_default_doc(&self) -> Uri {
         let path = self.project_path.get().unwrap();
-        let path = path.join(PROXY_WORKSPACE).join("global.js");
+        let path = path.join(PROXY_WORKSPACE).join("DEFAULT_INCLUDED.js");
         Uri::from_file_path(path).unwrap()
     }
 }

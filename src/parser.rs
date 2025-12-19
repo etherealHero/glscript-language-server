@@ -6,11 +6,11 @@ mod grammar {
     pub struct GlScriptSubsetGrammar;
 }
 
+use derive_more::{Constructor, From};
 use grammar::{GlScriptSubsetGrammar, Ident, Rule};
 use smol_str::{SmolStr, SmolStrBuilder};
 
-// TODO: emit buld hash to doc hash (on parse) - CHECK bench without hasher on emit
-#[derive(Debug)]
+#[derive(Debug, From)]
 pub enum Token {
     Include(Span),
     IncludePath(RawToken),
@@ -19,29 +19,29 @@ pub enum Token {
     LineTerminator(Position),
     Common(RawToken),
     CommonWithLineBreak(RawToken),
-    FinalNewLine(Line),
+    #[from]
+    EOI(Position),
 }
 
-type Line = u32;
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RawToken {
     pub pos: Position,
     pub text: SmolStr,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Span {
     pub pos: Position,
     pub len: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, From)]
 pub struct Position {
     pub line: u32,
     pub col: u32,
 }
 
+#[derive(Constructor)]
 struct PendingSpan {
     builder: SmolStrBuilder,
     line: u32,
@@ -58,16 +58,16 @@ fn pos_text_from_pair<'a>(pair: &'a faster_pest::Pair2<'_, Ident>) -> (Position,
     (pos, text)
 }
 
-impl Span {
-    pub fn new(pair: &faster_pest::Pair2<'_, Ident>) -> Self {
+impl<'a> From<&faster_pest::Pair2<'_, Ident<'a>>> for Span {
+    fn from(pair: &faster_pest::Pair2<'_, Ident>) -> Self {
         let (pos, text) = pos_text_from_pair(pair);
         let len = text.len() as u32;
         Self { pos, len }
     }
 }
 
-impl RawToken {
-    fn new(pair: &faster_pest::Pair2<'_, Ident>) -> Self {
+impl<'a> From<&faster_pest::Pair2<'_, Ident<'a>>> for RawToken {
+    fn from(pair: &faster_pest::Pair2<'_, Ident>) -> Self {
         let (pos, text) = pos_text_from_pair(pair);
         let text = text.into();
         Self { pos, text }
@@ -107,10 +107,10 @@ pub fn parse(raw_text: &str) -> Vec<Token> {
         }
 
         match rule {
-            Rule::IncludeToken => out.push(Token::Include(Span::new(pair))),
-            Rule::IncludePath => out.push(Token::IncludePath(RawToken::new(pair))),
-            Rule::RegionOpen => out.push(Token::RegionOpen(Span::new(pair))),
-            Rule::RegionClose => out.push(Token::RegionClose(Span::new(pair))),
+            Rule::IncludeToken => out.push(Token::Include(pair.into())),
+            Rule::IncludePath => out.push(Token::IncludePath(pair.into())),
+            Rule::RegionOpen => out.push(Token::RegionOpen(pair.into())),
+            Rule::RegionClose => out.push(Token::RegionClose(pair.into())),
             Rule::LineTerminator if pending.is_some() => {
                 let acc = pending.as_mut().unwrap();
                 acc.builder.push_str(pair.as_span().as_str());
@@ -135,12 +135,7 @@ pub fn parse(raw_text: &str) -> Vec<Token> {
                         flush(&mut out, &mut pending);
                         let mut builder = SmolStrBuilder::new();
                         builder.push_str(text);
-                        pending = Some(PendingSpan {
-                            ends_with_linebreak: false,
-                            builder,
-                            line,
-                            col,
-                        });
+                        pending = Some(PendingSpan::new(builder, line, col, false));
                     }
                 };
             }
@@ -149,11 +144,16 @@ pub fn parse(raw_text: &str) -> Vec<Token> {
 
     flush(&mut out, &mut pending);
 
-    match out.last() {
-        Some(Token::LineTerminator(p)) => out.push(Token::FinalNewLine(p.line + 1)),
-        Some(Token::CommonWithLineBreak(r)) => out.push(Token::FinalNewLine(r.pos.line + 1)),
-        _ => {}
-    }
+    let end_of_input: Position = match out.last() {
+        Some(Token::LineTerminator(p)) => (p.line + 1, 0).into(),
+        Some(Token::CommonWithLineBreak(r)) => (r.pos.line + 1, 0).into(),
+        Some(Token::IncludePath(r)) => (r.pos.line, r.pos.col + r.text.len() as u32).into(),
+        Some(Token::RegionClose(s)) => (s.pos.line, s.pos.col + s.len).into(),
+        Some(Token::Common(r)) => (r.pos.line, r.pos.col + r.text.len() as u32).into(),
+        None => (0, 0).into(),
+        _ => unreachable!(),
+    };
 
+    out.push(end_of_input.into());
     out
 }

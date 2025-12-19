@@ -44,6 +44,7 @@ derive_more = { version = "2.1.0", features = [
   "from",
   "into",
   "display",
+  "constructor",
 ] }
 convert_case = "^0.10"
 

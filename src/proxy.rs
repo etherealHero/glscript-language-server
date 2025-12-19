@@ -6,6 +6,7 @@ use async_lsp::lsp_types::Url as Uri;
 use async_lsp::lsp_types::request::Request;
 use async_lsp::router::Router;
 use async_lsp::{ClientSocket, ResponseError, ServerSocket};
+use derive_more::Constructor;
 
 use crate::forward::{ForwardingLayer, TService};
 use crate::state::State;
@@ -28,7 +29,7 @@ impl Canonicalize for Uri {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Constructor)]
 pub struct Proxy {
     client: Arc<OnceLock<ClientSocket>>,
     server: Arc<OnceLock<ServerSocket>>,
@@ -48,14 +49,9 @@ impl Proxy {
         server: Arc<OnceLock<ServerSocket>>,
         client: Arc<OnceLock<ClientSocket>>,
     ) -> (impl TService<Future: Send>, impl TService<Future: Send>) {
-        let proxy = Self {
-            server,
-            client,
-            state: Arc::new(State::default()),
-        };
+        let proxy = Self::new(client, server, Arc::new(State::default()));
         let sr = Router::from_language_server(proxy.clone());
         let cr = Router::from_language_client(proxy);
-
         let server;
         let client;
 

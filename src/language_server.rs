@@ -37,9 +37,9 @@ impl LanguageServer for Proxy {
 
             self.state.set_project(&root_ws.uri);
 
-            let _ = fs::File::create_new(self.state.get_global_doc().to_file_path().unwrap());
+            let _ = fs::File::create_new(self.state.get_default_doc().to_file_path().unwrap());
 
-            self.state.set_build(&self.state.get_global_doc());
+            self.state.set_build(&self.state.get_default_doc());
 
             root_ws.uri = Uri::from_directory_path(proxy_ws_dir).unwrap();
         }
@@ -132,13 +132,16 @@ impl LanguageServer for Proxy {
                     continue;
                 }
 
-                match build.forward_src_range(&change.range.expect("is some"), &doc.source) {
+                match build.forward_src_range(&change.range.unwrap(), &doc.source) {
                     Some(r) => forward_changes.push(lsp::TextDocumentContentChangeEvent {
                         range: Some(r),
                         range_length: change.range_length,
-                        text: change.text.replace("\r\n", "\n"),
+                        text: change.text.clone(),
                     }),
-                    None => dependency_changed = true, // FIXME: find exception cases
+                    None => panic!(
+                        "forward_src_range failed on did_change `{:#?}`",
+                        &change.range.unwrap()
+                    ),
                 };
             }
 
@@ -164,6 +167,7 @@ impl LanguageServer for Proxy {
                 },
             };
 
+            // TODO: maybe update non target builds in commit stage too on slow UX ?
             self.state.pending_build_changes(build_uri, forward_params);
         }
 
