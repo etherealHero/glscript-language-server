@@ -1,28 +1,37 @@
 // GlScript subset tokenizer grammar
-SourceFile  =  { _expression* }
-_expression = _{ _tracked | Untracked }
+SourceFile     = { _expression* }
+SourceFileFast = { _expressionFast* }
 
-_tracked  = _{ _includeStatement | _region | Regex | _stringLiteral | _comment | LineTerminator }
-Untracked =  { (!(_tracked | PlaceholderCloseBracket) ~ ANY)+ | (!(_tracked) ~ ANY) }
+_expression     = _{ _tracked | Untracked }
+_expressionFast = _{ _trackedFast | UntrackedFast }
+
+_tracked     = _{ _includeStatement | _region | Regex | _stringLiteral | _comment | LineTerminator }
+_trackedFast = _{ _includeStatement | _region | Regex | _stringLiteralFast | _comment | UntrackedWithLineEnding | LineTerminator }
+
+// TODO: rename to Common
+Untracked = { (!(_tracked | PlaceholderCloseBracket) ~ ANY)+ | (!(_tracked) ~ ANY) }
 // .                         ^fix nested stmt
 
-/*
-    // TODO: split parser by lexer (logos crate) -> parser (hand written)
-    // FIXME: missing backtracking emit pairs on fail complex rules
-    _trackedStart = _{
-    "import"
-    | "#include"
-    | "#text"
-    | "#sql"
-    | "#end"
-    | "\""
-    | "'"
-    | "`"
-    | "/"
-    | "\n"
-    | "\r"
-    }
-*/
+// TODO: make two parsers (fast without backtracing & with backtracking)
+// parse with check emit eq content and forward parse with backtracking on fail
+UntrackedFast = { (!(_trackedStart | PlaceholderCloseBracket) ~ ANY)+ | (!(_trackedStart) ~ ANY) }
+// .                                 ^fix nested stmt
+
+UntrackedWithLineEnding = @{ UntrackedFast ~ LineTerminator }
+
+// TODO: split parser by lexer (logos crate) -> parser (hand written)
+// FIXME: missing backtracking emit pairs on fail complex rules
+_trackedStart = _{
+    (IncludeToken ~ WhiteSpace)
+  | _regionOpenToken
+  | SingleLineCommentOpenToken
+  | MultiLineCommentOpenBracket
+  | Regex
+  | LineTerminator
+  | "\""
+  | "'"
+  | "`"
+}
 
 LineTerminator    =  { "\n" | "\r\n" | "\r" }
 WhiteSpace        =  { (" " | "\t")+ }
@@ -46,7 +55,8 @@ _region                   = _{
 }
 
 // String literals
-_stringLiteral = _{ DoubleStringLiteral | SingleStringLiteral | _templateString }
+_stringLiteral     = _{ DoubleStringLiteral | SingleStringLiteral | _templateString }
+_stringLiteralFast = _{ DoubleStringLiteral | SingleStringLiteral | _templateStringFast }
 
 DoubleStringLiteral = @{ "\"" ~ (!("\"" | LineTerminator) ~ _maybeEscapedChar)* ~ "\"" }
 SingleStringLiteral = @{ "'" ~ (!("'" | LineTerminator) ~ _maybeEscapedChar)* ~ "'" }
@@ -61,6 +71,12 @@ _templateExpression     = _{
     PlaceholderOpenBracket ~ (!PlaceholderCloseBracket ~ _expression)+ ~ PlaceholderCloseBracket
 }
 
+_templateExpressionFast = _{
+    PlaceholderOpenBracket ~ (!PlaceholderCloseBracket ~ _expressionFast)+ ~ PlaceholderCloseBracket
+}
+_templatePartFast       = _{ _templateExpressionFast | LineTerminator | TemplateStringChars }
+_templateStringFast     = _{ TemplateStringBracket ~ _templatePartFast* ~ TemplateStringBracket }
+
 // RegExp
 Regex         = @{ _regexBracket ~ _regexChars ~ _regexBracket }
 _regexChars   = _{ (!(_regexBracket | LineTerminator) ~ _maybeEscapedChar)+ }
@@ -69,7 +85,8 @@ _regexBracket = _{ (!("\\/" | MultiLineCommentOpenBracket) ~ "/") }
 // Comments
 _comment = _{ SingleLineComment | _muliLineComment }
 
-SingleLineComment = @{ "//" ~ (!LineTerminator ~ ANY)* }
+SingleLineComment          = @{ SingleLineCommentOpenToken ~ (!LineTerminator ~ ANY)* }
+SingleLineCommentOpenToken =  { "//" }
 
 MultiLineCommentOpenBracket  = @{ "/*" }
 MultiLineCommentChars        = @{ (!(MultiLineCommentCloseBracket | LineTerminator) ~ _maybeEscapedChar)+ }

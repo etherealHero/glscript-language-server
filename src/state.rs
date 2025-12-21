@@ -29,6 +29,7 @@ pub struct State {
 
 /// State of client buffers
 impl State {
+    // FIXME: some script duplicated. Validate uri_to_path fn
     pub fn set_doc(&self, source_uri: &Uri, changes: &[lsp::TextDocumentContentChangeEvent]) {
         let path_uri = self.uri_to_path(source_uri).unwrap();
         let (source, ident, source_hash, decl_stmt, link_stmt, path, buffer) = {
@@ -53,6 +54,7 @@ impl State {
             let source = source.unwrap().to_lowercase().replace('\\', "/");
             Source::new(source).into()
         });
+        tracing::info!("{source:?}");
 
         let ident = ident.unwrap_or(DocumentIdentifier::new(&source).into());
         let source_hash = source_hash.unwrap_or(SourceHash::new(&source).into());
@@ -62,7 +64,7 @@ impl State {
         let link_stmt = link_stmt.unwrap_or(DocumentLinkStatement::new(&source, &ident).into());
         let mut buffer = buffer.unwrap_or(Rope::new());
         let insert_doc = |p: PathBuf, text: &str, buffer: Rope| {
-            let tokens = parse(text);
+            let tokens = parse(text, &self);
             let doc = Document {
                 dependency_hash: (&tokens).into(),
                 tokens: tokens.into(),
@@ -222,13 +224,14 @@ impl State {
     /// returns caonnicalized path
     #[inline]
     pub fn uri_to_path(&self, uri: &Uri) -> anyhow::Result<PathBuf> {
+        let ref uri = uri.canonicalize();
         if let Some(source_path) = self.uri_to_path.get(uri) {
             return Ok(source_path.clone());
         }
 
         let sp = uri.to_file_path();
         let sp = sp.map_err(|_| anyhow::anyhow!("uri to file path fail: {uri}"))?;
-        let sp = dunce::canonicalize(sp)?;
+        let sp = dunce::canonicalize(dunce::simplified(&sp))?;
 
         self.uri_to_path.insert(uri.clone(), sp.clone());
         Ok(sp)

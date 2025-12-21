@@ -148,8 +148,8 @@ impl DocumentDeclarationStatement {
 
 #[derive(Debug, Clone)]
 pub struct DocumentLinkStatement {
-    pub left_offset: u32,
-    pub right_offset: u32,
+    pub left_offset: usize,
+    pub right_offset: usize,
     stmt: String,
 }
 
@@ -160,8 +160,8 @@ impl DocumentLinkStatement {
     /// ```
     pub fn new(source: &Source, identifier: &DocumentIdentifier) -> Self {
         const LINK_START_STMT: &'static str = "/** {@link ";
-        let left_offset = LINK_START_STMT.len() as u32;
-        let right_offset = left_offset + IDENTIFIER_PREFIX.len() as u32 + identifier.len() as u32;
+        let left_offset = LINK_START_STMT.len();
+        let right_offset = left_offset + IDENTIFIER_PREFIX.len() + identifier.len();
         let mut stmt = String::from("\n");
 
         stmt.push_str(LINK_START_STMT);
@@ -192,10 +192,10 @@ impl std::ops::Deref for DocumentLinkStatement {
 
 #[derive(Constructor)]
 pub struct PendingMap {
-    dst_line: u32,
-    dst_col: u32,
-    src_line: u32,
-    src_col: u32,
+    dst_line: usize,
+    dst_col: usize,
+    src_line: usize,
+    src_col: usize,
     source: Option<Arc<Source>>,
 }
 
@@ -206,10 +206,10 @@ impl PendingMap {
         let mut smb = sourcemap::SourceMapBuilder::new(None);
         let add = |smb: &mut sourcemap::SourceMapBuilder, m: &PendingMap| -> SrcId {
             let t = smb.add(
-                m.dst_line,
-                m.dst_col,
-                m.src_line,
-                m.src_col,
+                m.dst_line as u32,
+                m.dst_col as u32,
+                m.src_line as u32,
+                m.src_col as u32,
                 m.source.as_ref().map(|v| &*v.as_str()),
                 None,
                 false,

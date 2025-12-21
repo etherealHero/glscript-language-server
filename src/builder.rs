@@ -10,7 +10,8 @@ use crate::parser::{Position, Token};
 use crate::proxy::PROXY_WORKSPACE;
 use crate::state::State;
 use crate::types::{
-    DependencyHash, DocumentIdentifier, DocumentLinkStatement, PendingMap, Source, SourceHash,
+    DependencyHash, Document, DocumentIdentifier, DocumentLinkStatement, PendingMap, Source,
+    SourceHash,
 };
 
 pub const BUILD_FILE: &'static str = "build.js.emitted";
@@ -22,6 +23,9 @@ pub struct Build {
 
     dependency_hash: Vec<DependencyHash>,
     source_map: SourceMap,
+
+    // TODO: twice parse
+    documents: Vec<Document>,
 }
 
 impl Build {
@@ -126,12 +130,13 @@ impl Build {
         emit_buffer.push_str(uri.as_str().split("/").last().unwrap());
         emit_buffer.push_str("' */\n");
 
+        let count_sources = dependency_hash.len();
         let mut ctx = EmitCtx {
             state,
             dst_line: 1,
             emit_buffer,
             pending_maps,
-            visited_sources: HashSet::<SourceHash>::with_capacity(dependency_hash.len()),
+            visited_sources: HashSet::<SourceHash>::with_capacity(count_sources),
             defult_document: &state.get_default_doc(),
             dependency_hash,
         };
@@ -163,7 +168,20 @@ impl Build {
             .join(PROXY_WORKSPACE)
             .join(format!("{ident}.js"));
         let emit_uri = Uri::from_file_path(emit_path).unwrap();
-        let build = Self::new(ctx.emit_buffer, emit_uri, ctx.dependency_hash, source_map);
+
+        let mut build = Self::new(
+            ctx.emit_buffer,
+            emit_uri,
+            ctx.dependency_hash,
+            source_map,
+            Vec::with_capacity(count_sources),
+        );
+
+        for s in build.sources() {
+            if let Ok(d) = s.to_uri(state).and_then(|u| state.get_doc(&u)) {
+                build.documents.push(d);
+            }
+        }
 
         Ok(build)
     }
@@ -174,7 +192,7 @@ struct EmitCtx<'a> {
     defult_document: &'a Uri,
 
     pending_maps: &'a mut Vec<PendingMap>,
-    dst_line: u32,
+    dst_line: usize,
 
     visited_sources: HashSet<SourceHash>,
     emit_buffer: String,
@@ -182,7 +200,13 @@ struct EmitCtx<'a> {
 }
 
 impl<'a> EmitCtx<'a> {
-    fn map(&mut self, dst_col: u32, src_line: u32, src_col: u32, source: Option<Arc<Source>>) {
+    fn map(
+        &mut self,
+        dst_col: usize,
+        src_line: usize,
+        src_col: usize,
+        source: Option<Arc<Source>>,
+    ) {
         self.pending_maps.push(PendingMap::new(
             self.dst_line,
             dst_col,
@@ -226,15 +250,18 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
     let mut lt_ro_skip = false;
     let mut lt_ro = false;
     let mut lt_ro_offset = 0;
-    let add_sourcemap =
-        |dst_col: u32, pos: &Position, ctx: &mut EmitCtx<'_>, lt_ro: bool, lt_ro_offset: u32| {
-            let source = Some(source.clone());
-            let dst_col = match lt_ro {
-                true => dst_col + lt_ro_offset,
-                false => dst_col,
-            };
-            ctx.map(dst_col, pos.line, pos.col, source);
+    let add_sourcemap = |dst_col: usize,
+                         pos: &Position,
+                         ctx: &mut EmitCtx<'_>,
+                         lt_ro: bool,
+                         lt_ro_offset: usize| {
+        let source = Some(source.clone());
+        let dst_col = match lt_ro {
+            true => dst_col + lt_ro_offset,
+            false => dst_col,
         };
+        ctx.map(dst_col, pos.line, pos.col, source);
+    };
 
     for t in tokens {
         match t {
@@ -246,7 +273,8 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
             }
             Token::IncludePath(t) => {
                 let (line, col) = (t.pos.line, t.pos.col);
-                let dep_lit = t.text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
+                let text = t.text.as_ref().unwrap();
+                let dep_lit = text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
                 let dep_path = ctx.state.path_resolver(&path, dep_lit);
                 let dep_uri = &Uri::from_file_path(dep_path.as_path()).unwrap();
                 let dep_link = ctx
@@ -266,14 +294,14 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 ctx.line();
 
                 let _ = emit(ctx, dep_uri);
-                for _ in 0..(col + t.text.len() as u32) {
+                for _ in 0..(col + t.len) {
                     ctx.push(' ');
                 }
             }
             Token::RegionOpen(t) => {
                 add_sourcemap(0, &t.pos, ctx, lt_ro, lt_ro_offset);
                 lt_ro_skip = true;
-                lt_ro_offset = t.len as u32;
+                lt_ro_offset = t.len;
                 for _ in 0..(t.len - 1) {
                     ctx.push(' ');
                 }
@@ -292,7 +320,7 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 }
             }
             Token::LineTerminator(t) => {
-                add_sourcemap(t.col, t, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
                 lt_ro = false;
                 ctx.line();
                 ctx.push('\n');
@@ -301,14 +329,14 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
                 lt_ro = false;
                 ctx.line();
-                ctx.push_str(&t.text);
+                ctx.push_str(t.text.as_ref().unwrap());
             }
             Token::Common(t) => {
                 add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
-                ctx.push_str(&t.text);
+                ctx.push_str(t.text.as_ref().unwrap());
             }
             Token::EOI(t) => {
-                add_sourcemap(t.col, t, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
             }
         }
     }
