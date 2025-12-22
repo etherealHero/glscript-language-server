@@ -10,8 +10,7 @@ use crate::parser::{LineCol, Token};
 use crate::proxy::PROXY_WORKSPACE;
 use crate::state::State;
 use crate::types::{
-    DependencyHash, Document, DocumentIdentifier, DocumentLinkStatement, PendingMap, Source,
-    SourceHash,
+    DependencyHash, DocumentIdentifier, DocumentLinkStatement, PendingMap, Source, SourceHash,
 };
 
 pub const BUILD_FILE: &'static str = "build.js.emitted";
@@ -23,9 +22,6 @@ pub struct Build {
 
     dependency_hash: Vec<DependencyHash>,
     source_map: SourceMap,
-
-    // TODO: twice parse
-    documents: Vec<Document>,
 }
 
 impl Build {
@@ -112,7 +108,7 @@ impl Build {
 }
 
 impl Build {
-    // #[tracing::instrument(skip_all, fields( doc = uri.as_str().split("/").last().unwrap() ))]
+    #[tracing::instrument(skip_all, fields( doc = uri.as_str().split("/").last().unwrap() ))]
     pub fn create(state: &State, uri: &Uri, prev_build: Option<Arc<Self>>) -> anyhow::Result<Self> {
         let (ref mut pending_maps, dependency_hash, mut emit_buffer) = {
             if let Some(pb) = prev_build {
@@ -141,7 +137,7 @@ impl Build {
             dependency_hash,
         };
 
-        emit(&mut ctx, uri)?;
+        emit_wrapper(&mut ctx, uri)?;
 
         let source_map = PendingMap::into_sourcemap(ctx.pending_maps, state);
 
@@ -168,20 +164,7 @@ impl Build {
             .join(PROXY_WORKSPACE)
             .join(format!("{ident}.js"));
         let emit_uri = Uri::from_file_path(emit_path).unwrap();
-
-        let mut build = Self::new(
-            ctx.emit_buffer,
-            emit_uri,
-            ctx.dependency_hash,
-            source_map,
-            Vec::with_capacity(count_sources),
-        );
-
-        for s in build.sources() {
-            if let Ok(d) = s.to_uri(state).and_then(|u| state.get_doc(&u)) {
-                build.documents.push(d);
-            }
-        }
+        let build = Self::new(ctx.emit_buffer, emit_uri, ctx.dependency_hash, source_map);
 
         Ok(build)
     }
@@ -229,6 +212,11 @@ impl<'a> EmitCtx<'a> {
     }
 }
 
+#[tracing::instrument(skip_all)]
+fn emit_wrapper(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
+    emit(ctx, target)
+}
+
 fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
     let d = ctx.state.get_doc(target)?;
     let (source, path, tokens, decl_stmt) = (&d.source, &d.path, d.tokens.iter(), &d.decl_stmt);
@@ -270,8 +258,7 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
             }
             Token::IncludePath(t) => {
                 let (line, col) = (t.line_col.line, t.line_col.col);
-                let text = t.text.as_ref().unwrap();
-                let dep_lit = text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
+                let dep_lit = t.text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
                 let dep_path = ctx.state.path_resolver(&path, dep_lit);
                 let dep_uri = &Uri::from_file_path(dep_path.as_path()).unwrap();
                 let dep_link = ctx
@@ -291,7 +278,11 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 ctx.line();
 
                 let _ = emit(ctx, dep_uri);
-                for _ in 0..(col + t.len) {
+
+                // traling statements after include statement on the same line
+                ctx.push('\n');
+                ctx.line();
+                for _ in 0..(t.line_col.col + t.len) {
                     ctx.push(' ');
                 }
             }
@@ -317,7 +308,7 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 }
             }
             Token::LineTerminator(t) => {
-                add_sourcemap(t.line_col.col, &t.line_col, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(t.col, &t, ctx, lt_ro, lt_ro_offset);
                 lt_ro = false;
                 ctx.line();
                 ctx.push('\n');
@@ -326,14 +317,14 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 add_sourcemap(t.line_col.col, &t.line_col, ctx, lt_ro, lt_ro_offset);
                 lt_ro = false;
                 ctx.line();
-                ctx.push_str(t.text.as_ref().unwrap());
+                ctx.push_str(t.text);
             }
             Token::Common(t) => {
                 add_sourcemap(t.line_col.col, &t.line_col, ctx, lt_ro, lt_ro_offset);
-                ctx.push_str(t.text.as_ref().unwrap());
+                ctx.push_str(t.text);
             }
             Token::EOI(t) => {
-                add_sourcemap(t.line_col.col, &t.line_col, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(t.col, &t, ctx, lt_ro, lt_ro_offset);
             }
         }
     }

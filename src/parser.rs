@@ -32,21 +32,27 @@ type Pair<'a> = PestPair<'a, Rule>;
 
 #[derive(Debug)]
 pub enum Token<'a> {
-    Include(RawToken<'a>),
+    Include(Span),
     IncludePath(RawToken<'a>),
-    RegionOpen(RawToken<'a>),
-    RegionClose(RawToken<'a>),
-    LineTerminator(RawToken<'a>),
+    RegionOpen(Span),
+    RegionClose(Span),
+    LineTerminator(LineCol),
     Common(RawToken<'a>),
     CommonWithLineEnding(RawToken<'a>),
-    EOI(RawToken<'a>),
+    EOI(LineCol),
 }
 
 #[derive(Debug, Constructor)]
 pub struct RawToken<'a> {
     pub line_col: LineCol,
     pub len: usize,
-    pub text: Option<&'a str>,
+    pub text: &'a str,
+}
+
+#[derive(Debug, Constructor)]
+pub struct Span {
+    pub line_col: LineCol,
+    pub len: usize,
 }
 
 #[derive(Debug, From)]
@@ -63,7 +69,7 @@ struct Pending {
     has_linebreak: bool,
 }
 
-#[tracing::instrument(skip(raw_text))]
+// #[tracing::instrument(skip(raw_text))]
 fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> Pairs<'_> {
     GlScriptSubsetGrammar::parse(entry_rule, raw_text)
         .unwrap()
@@ -72,7 +78,7 @@ fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> Pairs<'_> {
         .into_inner()
 }
 
-#[tracing::instrument(skip_all)]
+// #[tracing::instrument(skip_all)]
 fn get_pairs<'a>(raw_text: &'a str, _state: &State) -> Pairs<'a> {
     let pairs = parse_raw_text(Rule::SourceFileFast, raw_text);
     let (mut pos, mut ok) = (0, true);
@@ -114,8 +120,8 @@ pub fn parse<'a>(raw_text: &'a str, _state: &State) -> Vec<Token<'a>> {
     let (mut line, mut offset, mut pos, mut pending) = (0, 0, 0, None::<Pending>);
     let flush_pending_token = |p: Pending| {
         let pending_range = p.init_pos..(p.init_pos + p.pending_len);
-        let text = raw_text.get(pending_range).unwrap();
-        let token = RawToken::new(p.init_line_col, p.pending_len, Some(text));
+        let text = unsafe { raw_text.get(pending_range).unwrap_unchecked() };
+        let token = RawToken::new(p.init_line_col, p.pending_len, text);
         match p.has_linebreak {
             true => Token::CommonWithLineEnding(token),
             false => Token::Common(token),
@@ -125,9 +131,10 @@ pub fn parse<'a>(raw_text: &'a str, _state: &State) -> Vec<Token<'a>> {
     for ref pair in pairs {
         let (rule, pair_str) = (pair.as_rule(), pair.as_str());
         let pair_len = pair_str.len();
+        let emit_span = || Span::new((line, offset).into(), pair_len);
         let emit_token = || {
-            let text = raw_text.get(pos..(pos + pair_len)).unwrap();
-            RawToken::new((line, offset).into(), pair_len, Some(text))
+            let text = unsafe { raw_text.get(pos..(pos + pair_len)).unwrap_unchecked() };
+            RawToken::new((line, offset).into(), pair_len, text)
         };
 
         if matches!(
@@ -149,12 +156,12 @@ pub fn parse<'a>(raw_text: &'a str, _state: &State) -> Vec<Token<'a>> {
                     Some(())
                 });
             }
-            Rule::LineTerminator => out.push(Token::LineTerminator(emit_token())),
+            Rule::LineTerminator => out.push(Token::LineTerminator((line, offset).into())),
             Rule::CommonWithLineEnding => out.push(Token::CommonWithLineEnding(emit_token())),
-            Rule::IncludeToken => out.push(Token::Include(emit_token())),
+            Rule::IncludeToken => out.push(Token::Include(emit_span())),
             Rule::IncludePath => out.push(Token::IncludePath(emit_token())),
-            Rule::RegionOpen => out.push(Token::RegionOpen(emit_token())),
-            Rule::RegionClose => out.push(Token::RegionClose(emit_token())),
+            Rule::RegionOpen => out.push(Token::RegionOpen(emit_span())),
+            Rule::RegionClose => out.push(Token::RegionClose(emit_span())),
             _ => match pending {
                 Some(ref mut acc) if acc.init_line_col.line == line => acc.pending_len += pair_len,
                 _ => pending = Pending::new((line, offset).into(), pos, pair_len, false).into(),
@@ -174,7 +181,7 @@ pub fn parse<'a>(raw_text: &'a str, _state: &State) -> Vec<Token<'a>> {
     });
 
     let end_of_input: LineCol = match out.last() {
-        Some(Token::LineTerminator(r)) => (r.line_col.line + 1, 0).into(),
+        Some(Token::LineTerminator(r)) => (r.line + 1, 0).into(),
         Some(Token::CommonWithLineEnding(r)) => (r.line_col.line + 1, 0).into(),
         Some(Token::IncludePath(r)) => (r.line_col.line, r.line_col.col + r.len).into(),
         Some(Token::RegionClose(r)) => (r.line_col.line, r.line_col.col + r.len).into(),
@@ -183,6 +190,6 @@ pub fn parse<'a>(raw_text: &'a str, _state: &State) -> Vec<Token<'a>> {
         _ => unreachable!(),
     };
 
-    out.push(Token::EOI(RawToken::new(end_of_input, 0, None)));
+    out.push(Token::EOI(end_of_input));
     out
 }

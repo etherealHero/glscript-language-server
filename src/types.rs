@@ -63,10 +63,10 @@ impl From<&Vec<Token<'_>>> for DependencyHash {
 
         for t in tokens {
             match t {
-                Token::IncludePath(raw_span) => {
-                    raw_span.line_col.col.hash(hasher);
-                    raw_span.line_col.line.hash(hasher);
-                    raw_span.text.hash(hasher);
+                Token::IncludePath(token) => {
+                    token.line_col.col.hash(hasher);
+                    token.line_col.line.hash(hasher);
+                    token.text.hash(hasher);
                 }
                 _ => {}
             }
@@ -201,6 +201,7 @@ pub struct PendingMap {
 }
 
 impl PendingMap {
+    #[tracing::instrument(skip_all)]
     pub fn into_sourcemap(maps: &Vec<PendingMap>, _state: &State) -> sourcemap::SourceMap {
         type SrcId = u32;
 
