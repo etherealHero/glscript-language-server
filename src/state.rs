@@ -1,9 +1,10 @@
 use std::fs;
+use std::mem::transmute;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use crate::builder::Build;
-use crate::parser::parse;
+use crate::parser::{Token, parse};
 use crate::proxy::{Canonicalize, PROXY_WORKSPACE};
 use crate::types::{
     BuildWithVersion, Document, DocumentDeclarationStatement, DocumentIdentifier,
@@ -64,10 +65,15 @@ impl State {
         let link_stmt = link_stmt.unwrap_or(DocumentLinkStatement::new(&source, &ident).into());
         let mut buffer = buffer.unwrap_or(Rope::new());
         let insert_doc = |p: PathBuf, text: &str, buffer: Rope| {
-            let tokens = parse(text, &self);
+            let tokens_source = Arc::new(text.to_string());
+            let binding = tokens_source.clone();
+            let tokens = parse(&binding, &self);
+            let tokens_static = unsafe { transmute::<Vec<Token<'_>>, Vec<Token<'static>>>(tokens) };
+            let tokens = Arc::new(tokens_static);
             let doc = Document {
-                dependency_hash: (&tokens).into(),
-                tokens: tokens.into(),
+                tokens_source,
+                dependency_hash: (&*tokens.clone()).into(),
+                tokens,
                 buffer: buffer.into(),
                 decl_stmt,
                 link_stmt,

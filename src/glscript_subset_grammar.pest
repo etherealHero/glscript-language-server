@@ -2,25 +2,19 @@
 SourceFile     = { _expression* }
 SourceFileFast = { _expressionFast* }
 
-_expression     = _{ _tracked | Untracked }
-_expressionFast = _{ _trackedFast | UntrackedFast }
+_expression     = _{ _tracked | Common }
+_expressionFast = _{ _trackedFast | CommonFast }
 
 _tracked     = _{ _includeStatement | _region | Regex | _stringLiteral | _comment | LineTerminator }
-_trackedFast = _{ _includeStatement | _region | Regex | _stringLiteralFast | _comment | UntrackedWithLineEnding | LineTerminator }
+_trackedFast = _{ _includeStatement | _region | Regex | _stringLiteralFast | _comment | CommonWithLineEnding | LineTerminator }
 
-// TODO: rename to Common
-Untracked = { (!(_tracked | PlaceholderCloseBracket) ~ ANY)+ | (!(_tracked) ~ ANY) }
-// .                         ^fix nested stmt
+Common = { (!(_tracked | PlaceholderCloseBracket) ~ ANY)+ | (!(_tracked) ~ ANY) }
+// .                     ^fix nested stmt
 
-// TODO: make two parsers (fast without backtracing & with backtracking)
-// parse with check emit eq content and forward parse with backtracking on fail
-UntrackedFast = { (!(_trackedStart | PlaceholderCloseBracket) ~ ANY)+ | (!(_trackedStart) ~ ANY) }
-// .                                 ^fix nested stmt
+CommonFast = { (!(_trackedStart | PlaceholderCloseBracket) ~ ANY)+ | (!(_trackedStart) ~ ANY) }
 
-UntrackedWithLineEnding = @{ UntrackedFast ~ LineTerminator }
+CommonWithLineEnding = @{ CommonFast ~ LineTerminator }
 
-// TODO: split parser by lexer (logos crate) -> parser (hand written)
-// FIXME: missing backtracking emit pairs on fail complex rules
 _trackedStart = _{
     (IncludeToken ~ WhiteSpace)
   | _regionOpenToken
@@ -28,9 +22,9 @@ _trackedStart = _{
   | MultiLineCommentOpenBracket
   | Regex
   | LineTerminator
-  | "\""
-  | "'"
-  | "`"
+  | _doubleQouteBracket
+  | _singleQouteBracket
+  | TemplateStringBracket
 }
 
 LineTerminator    =  { "\n" | "\r\n" | "\r" }
@@ -58,8 +52,10 @@ _region                   = _{
 _stringLiteral     = _{ DoubleStringLiteral | SingleStringLiteral | _templateString }
 _stringLiteralFast = _{ DoubleStringLiteral | SingleStringLiteral | _templateStringFast }
 
-DoubleStringLiteral = @{ "\"" ~ (!("\"" | LineTerminator) ~ _maybeEscapedChar)* ~ "\"" }
-SingleStringLiteral = @{ "'" ~ (!("'" | LineTerminator) ~ _maybeEscapedChar)* ~ "'" }
+_doubleQouteBracket =  { "\"" }
+_singleQouteBracket =  { "'" }
+DoubleStringLiteral = @{ _doubleQouteBracket ~ (!(_doubleQouteBracket | LineTerminator) ~ _maybeEscapedChar)* ~ _doubleQouteBracket }
+SingleStringLiteral = @{ _singleQouteBracket ~ (!(_singleQouteBracket | LineTerminator) ~ _maybeEscapedChar)* ~ _singleQouteBracket }
 
 TemplateStringBracket   = @{ "`" }
 TemplateStringChars     = @{ (!(TemplateStringBracket | PlaceholderOpenBracket | LineTerminator) ~ _maybeEscapedChar)+ }

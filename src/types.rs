@@ -24,7 +24,8 @@ pub struct Document {
     pub source_ident: Arc<DocumentIdentifier>,
     pub source_hash: SourceHash,
 
-    pub tokens: Arc<Vec<Token>>,
+    pub tokens: Arc<Vec<Token<'static>>>,
+    pub tokens_source: Arc<String>,
     pub dependency_hash: DependencyHash,
     pub buffer: Arc<ropey::Rope>,
 
@@ -56,15 +57,15 @@ impl Source {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deref)]
 pub struct DependencyHash(u64);
 
-impl From<&Vec<Token>> for DependencyHash {
+impl From<&Vec<Token<'_>>> for DependencyHash {
     fn from(tokens: &Vec<Token>) -> Self {
         let ref mut hasher = fxhash::FxHasher64::default();
 
         for t in tokens {
             match t {
                 Token::IncludePath(raw_span) => {
-                    raw_span.pos.col.hash(hasher);
-                    raw_span.pos.line.hash(hasher);
+                    raw_span.line_col.col.hash(hasher);
+                    raw_span.line_col.line.hash(hasher);
                     raw_span.text.hash(hasher);
                 }
                 _ => {}

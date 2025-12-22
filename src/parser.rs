@@ -1,4 +1,6 @@
 mod grammar {
+    // turn on some pest crate in Cargo.toml
+    // use pest_derive::Parser;
     use faster_pest::*;
 
     #[derive(Parser)]
@@ -6,59 +8,63 @@ mod grammar {
     pub struct GlScriptSubsetGrammar;
 }
 
-use derive_more::{Constructor, From};
-use grammar::{GlScriptSubsetGrammar, Ident, Rule};
-use smol_str::{SmolStr, SmolStrBuilder};
-
 // for debug only
 use crate::state::State;
 
+use derive_more::{Constructor, From};
+
+// turn on some pest crate in Cargo.toml
+// /*
+use grammar::{GlScriptSubsetGrammar, Ident, Rule};
+type Pairs<'a> = faster_pest::Pairs2<'a, Ident<'a>>;
+#[allow(unused)]
+type Pair<'a> = faster_pest::Pair2<'a, Ident<'a>>;
+// */
+/*
+use grammar::{GlScriptSubsetGrammar, Rule};
+use pest::{
+    Parser,
+    iterators::{Pair as PestPair, Pairs as PestPairs},
+};
+type Pairs<'a> = PestPairs<'a, Rule>;
+type Pair<'a> = PestPair<'a, Rule>;
+// */
+
 #[derive(Debug)]
-pub enum Token {
-    Include(RawToken),
-    IncludePath(RawToken),
-    RegionOpen(RawToken),
-    RegionClose(RawToken),
-    LineTerminator(RawToken),
-    Common(RawToken),
-    CommonWithLineBreak(RawToken),
-    EOI(RawToken),
+pub enum Token<'a> {
+    Include(RawToken<'a>),
+    IncludePath(RawToken<'a>),
+    RegionOpen(RawToken<'a>),
+    RegionClose(RawToken<'a>),
+    LineTerminator(RawToken<'a>),
+    Common(RawToken<'a>),
+    CommonWithLineEnding(RawToken<'a>),
+    EOI(RawToken<'a>),
 }
 
 #[derive(Debug, Constructor)]
-pub struct RawToken {
-    pub pos: Position,
+pub struct RawToken<'a> {
+    pub line_col: LineCol,
     pub len: usize,
-    pub text: Option<SmolStr>,
+    pub text: Option<&'a str>,
 }
 
 #[derive(Debug, From)]
-pub struct Position {
+pub struct LineCol {
     pub line: usize,
     pub col: usize,
 }
 
 #[derive(Constructor)]
-struct PendingSpan {
-    pos: Position,
-    builder: SmolStrBuilder,
-    ends_with_linebreak: bool,
-}
-
-impl<'a> From<&faster_pest::Pair2<'_, Ident<'a>>> for RawToken {
-    fn from(pair: &faster_pest::Pair2<'_, Ident>) -> Self {
-        let sp = pair.as_span();
-        let text = sp.as_str();
-        let len = text.len();
-        let line_col = sp.start_pos().line_col();
-        let pos = (line_col.0 - 1, line_col.1 - 1).into();
-        let text = Some(text.into());
-        Self { pos, text, len }
-    }
+struct Pending {
+    init_line_col: LineCol,
+    init_pos: usize,
+    pending_len: usize,
+    has_linebreak: bool,
 }
 
 #[tracing::instrument(skip(raw_text))]
-fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> faster_pest::Pairs2<'_, grammar::Ident<'_>> {
+fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> Pairs<'_> {
     GlScriptSubsetGrammar::parse(entry_rule, raw_text)
         .unwrap()
         .next()
@@ -66,33 +72,8 @@ fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> faster_pest::Pairs2<'_, g
         .into_inner()
 }
 
-#[inline]
-fn flush(out: &mut Vec<Token>, p: PendingSpan) {
-    let text = p.builder.finish();
-    let raw_token = RawToken::new(p.pos, text.len(), text.into());
-    match p.ends_with_linebreak {
-        true => out.push(Token::CommonWithLineBreak(raw_token)),
-        false => out.push(Token::Common(raw_token)),
-    };
-}
-
 #[tracing::instrument(skip_all)]
-fn push_eoi_token(out: &mut Vec<Token>) {
-    let end_of_input: Position = match out.last() {
-        Some(Token::LineTerminator(r)) => (r.pos.line + 1, 0).into(),
-        Some(Token::CommonWithLineBreak(r)) => (r.pos.line + 1, 0).into(),
-        Some(Token::IncludePath(r)) => (r.pos.line, r.pos.col + r.len).into(),
-        Some(Token::RegionClose(r)) => (r.pos.line, r.pos.col + r.len).into(),
-        Some(Token::Common(r)) => (r.pos.line, r.pos.col + r.len).into(),
-        None => (0, 0).into(),
-        _ => unreachable!(),
-    };
-
-    out.push(Token::EOI(RawToken::new(end_of_input, 0, None)));
-}
-
-#[tracing::instrument(skip_all)]
-fn get_pairs<'a>(raw_text: &'a str, _state: &State) -> faster_pest::Pairs2<'a, grammar::Ident<'a>> {
+fn get_pairs<'a>(raw_text: &'a str, _state: &State) -> Pairs<'a> {
     let pairs = parse_raw_text(Rule::SourceFileFast, raw_text);
     let (mut pos, mut ok) = (0, true);
 
@@ -114,8 +95,7 @@ fn get_pairs<'a>(raw_text: &'a str, _state: &State) -> faster_pest::Pairs2<'a, g
             #[cfg(debug_assertions)]
             {
                 let mut emit_text = String::with_capacity(raw_text.len());
-                let walk =
-                    |n: faster_pest::Pair2<'_, Ident<'_>>| emit_text.push_str(n.as_span().as_str());
+                let walk = |n: Pair<'_>| emit_text.push_str(n.as_span().as_str());
                 pairs.clone().for_each(walk);
 
                 std::fs::write(_state.get_project().join("emit_text.txt"), emit_text).unwrap();
@@ -128,57 +108,81 @@ fn get_pairs<'a>(raw_text: &'a str, _state: &State) -> faster_pest::Pairs2<'a, g
 }
 
 #[tracing::instrument(skip_all)]
-pub fn parse(raw_text: &str, _state: &State) -> Vec<Token> {
+pub fn parse<'a>(raw_text: &'a str, _state: &State) -> Vec<Token<'a>> {
     let pairs = get_pairs(raw_text, _state);
     let mut out = Vec::with_capacity(raw_text.lines().count());
-    let mut pending: Option<PendingSpan> = None;
+    let (mut line, mut offset, mut pos, mut pending) = (0, 0, 0, None::<Pending>);
+    let flush_pending_token = |p: Pending| {
+        let pending_range = p.init_pos..(p.init_pos + p.pending_len);
+        let text = raw_text.get(pending_range).unwrap();
+        let token = RawToken::new(p.init_line_col, p.pending_len, Some(text));
+        match p.has_linebreak {
+            true => Token::CommonWithLineEnding(token),
+            false => Token::Common(token),
+        }
+    };
 
     for ref pair in pairs {
-        let rule = pair.as_rule();
+        let (rule, pair_str) = (pair.as_rule(), pair.as_str());
+        let pair_len = pair_str.len();
+        let emit_token = || {
+            let text = raw_text.get(pos..(pos + pair_len)).unwrap();
+            RawToken::new((line, offset).into(), pair_len, Some(text))
+        };
 
         if matches!(
             rule,
             Rule::IncludeToken | Rule::IncludePath | Rule::RegionOpen | Rule::RegionClose
         ) {
-            pending.take().and_then(|p| flush(&mut out, p).into());
+            pending.take().and_then(|p| {
+                out.push(flush_pending_token(p));
+                Some(())
+            });
         }
 
         match rule {
-            Rule::IncludeToken => out.push(Token::Include(pair.into())),
-            Rule::IncludePath => out.push(Token::IncludePath(pair.into())),
-            Rule::RegionOpen => out.push(Token::RegionOpen(pair.into())),
-            Rule::RegionClose => out.push(Token::RegionClose(pair.into())),
-            Rule::LineTerminator if pending.is_some() => {
-                let acc = pending.as_mut().unwrap();
-                acc.builder.push('\n');
-                acc.ends_with_linebreak = true;
-                pending.take().and_then(|p| flush(&mut out, p).into());
+            Rule::LineTerminator | Rule::CommonWithLineEnding if pending.is_some() => {
+                pending.take().and_then(|mut p| {
+                    p.has_linebreak = true;
+                    p.pending_len += pair_len;
+                    out.push(flush_pending_token(p));
+                    Some(())
+                });
             }
-            Rule::LineTerminator => out.push(Token::LineTerminator(pair.into())),
-            Rule::UntrackedWithLineEnding if pending.is_some() => {
-                let acc = pending.as_mut().unwrap();
-                acc.builder.push_str(pair.as_span().as_str());
-                acc.ends_with_linebreak = true;
-                pending.take().and_then(|p| flush(&mut out, p).into());
-            }
-            Rule::UntrackedWithLineEnding => out.push(Token::CommonWithLineBreak(pair.into())),
-            _ => {
-                let token: RawToken = pair.into();
-                let (text, line) = (&token.text.unwrap(), token.pos.line);
-                match pending {
-                    Some(ref mut acc) if acc.pos.line == line => acc.builder.push_str(text),
-                    _ => {
-                        let mut builder = SmolStrBuilder::new();
-                        builder.push_str(text);
-                        pending = Some(PendingSpan::new(token.pos, builder, false));
-                    }
-                };
-            }
+            Rule::LineTerminator => out.push(Token::LineTerminator(emit_token())),
+            Rule::CommonWithLineEnding => out.push(Token::CommonWithLineEnding(emit_token())),
+            Rule::IncludeToken => out.push(Token::Include(emit_token())),
+            Rule::IncludePath => out.push(Token::IncludePath(emit_token())),
+            Rule::RegionOpen => out.push(Token::RegionOpen(emit_token())),
+            Rule::RegionClose => out.push(Token::RegionClose(emit_token())),
+            _ => match pending {
+                Some(ref mut acc) if acc.init_line_col.line == line => acc.pending_len += pair_len,
+                _ => pending = Pending::new((line, offset).into(), pos, pair_len, false).into(),
+            },
+        };
+
+        pos += pair_len;
+        match matches!(rule, Rule::LineTerminator | Rule::CommonWithLineEnding) {
+            true => (offset = 0, line += 1),
+            false => (offset += pair_str.chars().count(), ()),
         };
     }
 
-    pending.take().and_then(|p| flush(&mut out, p).into());
-    push_eoi_token(&mut out);
+    pending.take().and_then(|p| {
+        out.push(flush_pending_token(p));
+        Some(())
+    });
 
+    let end_of_input: LineCol = match out.last() {
+        Some(Token::LineTerminator(r)) => (r.line_col.line + 1, 0).into(),
+        Some(Token::CommonWithLineEnding(r)) => (r.line_col.line + 1, 0).into(),
+        Some(Token::IncludePath(r)) => (r.line_col.line, r.line_col.col + r.len).into(),
+        Some(Token::RegionClose(r)) => (r.line_col.line, r.line_col.col + r.len).into(),
+        Some(Token::Common(r)) => (r.line_col.line, r.line_col.col + r.len).into(),
+        None => (0, 0).into(),
+        _ => unreachable!(),
+    };
+
+    out.push(Token::EOI(RawToken::new(end_of_input, 0, None)));
     out
 }

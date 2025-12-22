@@ -6,7 +6,7 @@ use async_lsp::lsp_types::Url as Uri;
 use derive_more::Constructor;
 use sourcemap::SourceMap;
 
-use crate::parser::{Position, Token};
+use crate::parser::{LineCol, Token};
 use crate::proxy::PROXY_WORKSPACE;
 use crate::state::State;
 use crate::types::{
@@ -250,29 +250,26 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
     let mut lt_ro_skip = false;
     let mut lt_ro = false;
     let mut lt_ro_offset = 0;
-    let add_sourcemap = |dst_col: usize,
-                         pos: &Position,
-                         ctx: &mut EmitCtx<'_>,
-                         lt_ro: bool,
-                         lt_ro_offset: usize| {
-        let source = Some(source.clone());
-        let dst_col = match lt_ro {
-            true => dst_col + lt_ro_offset,
-            false => dst_col,
+    let add_sourcemap =
+        |dst_col: usize, pos: &LineCol, ctx: &mut EmitCtx<'_>, lt_ro: bool, lt_ro_offset: usize| {
+            let source = Some(source.clone());
+            let dst_col = match lt_ro {
+                true => dst_col + lt_ro_offset,
+                false => dst_col,
+            };
+            ctx.map(dst_col, pos.line, pos.col, source);
         };
-        ctx.map(dst_col, pos.line, pos.col, source);
-    };
 
     for t in tokens {
         match t {
             Token::Include(t) => {
-                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(t.line_col.col, &t.line_col, ctx, lt_ro, lt_ro_offset);
                 for _ in 0..t.len {
                     ctx.push(' ');
                 }
             }
             Token::IncludePath(t) => {
-                let (line, col) = (t.pos.line, t.pos.col);
+                let (line, col) = (t.line_col.line, t.line_col.col);
                 let text = t.text.as_ref().unwrap();
                 let dep_lit = text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
                 let dep_path = ctx.state.path_resolver(&path, dep_lit);
@@ -299,7 +296,7 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 }
             }
             Token::RegionOpen(t) => {
-                add_sourcemap(0, &t.pos, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(0, &t.line_col, ctx, lt_ro, lt_ro_offset);
                 lt_ro_skip = true;
                 lt_ro_offset = t.len;
                 for _ in 0..(t.len - 1) {
@@ -312,7 +309,7 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 lt_ro = true;
             }
             Token::RegionClose(t) => {
-                add_sourcemap(0, &t.pos, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(0, &t.line_col, ctx, lt_ro, lt_ro_offset);
                 ctx.push('`');
                 ctx.push(';');
                 for _ in 0..(t.len - 2) {
@@ -320,23 +317,23 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
                 }
             }
             Token::LineTerminator(t) => {
-                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(t.line_col.col, &t.line_col, ctx, lt_ro, lt_ro_offset);
                 lt_ro = false;
                 ctx.line();
                 ctx.push('\n');
             }
-            Token::CommonWithLineBreak(t) => {
-                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
+            Token::CommonWithLineEnding(t) => {
+                add_sourcemap(t.line_col.col, &t.line_col, ctx, lt_ro, lt_ro_offset);
                 lt_ro = false;
                 ctx.line();
                 ctx.push_str(t.text.as_ref().unwrap());
             }
             Token::Common(t) => {
-                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(t.line_col.col, &t.line_col, ctx, lt_ro, lt_ro_offset);
                 ctx.push_str(t.text.as_ref().unwrap());
             }
             Token::EOI(t) => {
-                add_sourcemap(t.pos.col, &t.pos, ctx, lt_ro, lt_ro_offset);
+                add_sourcemap(t.line_col.col, &t.line_col, ctx, lt_ro, lt_ro_offset);
             }
         }
     }
