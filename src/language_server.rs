@@ -99,7 +99,7 @@ impl LanguageServer for Proxy {
         ControlFlow::Continue(())
     }
 
-    #[tracing::instrument(skip(self, params))]
+    #[tracing::instrument(skip_all)]
     fn did_change(&mut self, params: lsp::DidChangeTextDocumentParams) -> Self::NotifyResult {
         let uri = &params.text_document.uri;
         let mut service = self.server();
@@ -110,67 +110,25 @@ impl LanguageServer for Proxy {
         }
 
         let doc = self.state.get_doc(uri).unwrap();
+        let hash_prev = doc.dependency_hash.clone();
 
         // 1. apply changes to raw document
         self.state.set_doc(uri, &params.content_changes);
+        let hash_new = self.state.get_doc(uri).unwrap().dependency_hash;
 
         // 2. forward params into language server
-        let mut builds_for_changes = self.state.get_builds_contains_source(&doc.source);
-        builds_for_changes.sort_by(|a, b| (*a != *doc.path).cmp(&(*b != *doc.path)));
+        let mut docs_for_changes = self.state.get_builds_contains_source(&doc.source);
+        docs_for_changes.sort_by(|a, b| (*a != *doc.path).cmp(&(*b != *doc.path)));
 
-        let mut dependency_changed = false;
+        assert_eq!(docs_for_changes.first(), Some(&*doc.path));
 
-        assert_eq!(builds_for_changes.first(), Some(&*doc.path));
-
-        for ref build_source_path in builds_for_changes {
-            let build_uri = &Uri::from_file_path(build_source_path).expect("valid build entry uri");
-            let build = self.state.get_build(build_uri).expect("iteration build");
-            let mut forward_changes = Vec::with_capacity(params.content_changes.len());
-
-            for change in &params.content_changes {
-                if change.range.is_none() {
-                    continue;
-                }
-
-                match build.forward_src_range(&change.range.unwrap(), &doc.source) {
-                    Some(r) => forward_changes.push(lsp::TextDocumentContentChangeEvent {
-                        range: Some(r),
-                        range_length: change.range_length,
-                        text: change.text.clone(),
-                    }),
-                    None => panic!(
-                        "forward_src_range failed on did_change `{:#?}`",
-                        &change.range.unwrap()
-                    ),
-                };
-            }
-
-            let new_build_with_version = self.state.set_build(build_uri);
-
-            if new_build_with_version.build.dependency_hash() != build.dependency_hash() {
-                dependency_changed = true;
-            }
-
-            let forward_params = lsp::DidChangeTextDocumentParams {
-                text_document: lsp::VersionedTextDocumentIdentifier {
-                    uri: new_build_with_version.build.emit_uri.clone(),
-                    version: new_build_with_version.version,
-                },
-                content_changes: if dependency_changed {
-                    vec![lsp::TextDocumentContentChangeEvent {
-                        text: new_build_with_version.build.emit_text.clone(),
-                        range_length: None,
-                        range: None,
-                    }]
-                } else {
-                    forward_changes
-                },
-            };
-
-            // TODO: maybe update non target builds in commit stage too on slow UX ?
-            self.state.pending_build_changes(build_uri, forward_params);
+        for path in docs_for_changes {
+            let dep_changed = hash_prev != hash_new;
+            let params = params.clone();
+            self.state.add_client_doc_changes(path, params, dep_changed);
         }
 
+        // 3. commit req doc
         self.state.commit_build_changes(uri, &mut service);
         ControlFlow::Continue(())
     }

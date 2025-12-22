@@ -9,9 +9,7 @@ use sourcemap::SourceMap;
 use crate::parser::{LineCol, Token};
 use crate::proxy::PROXY_WORKSPACE;
 use crate::state::State;
-use crate::types::{
-    DependencyHash, DocumentIdentifier, DocumentLinkStatement, PendingMap, Source, SourceHash,
-};
+use crate::types::{DocumentIdentifier, DocumentLinkStatement, PendingMap, Source, SourceHash};
 
 pub const BUILD_FILE: &'static str = "build.js.emitted";
 
@@ -20,7 +18,6 @@ pub struct Build {
     pub emit_text: String,
     pub emit_uri: Uri,
 
-    dependency_hash: Vec<DependencyHash>,
     source_map: SourceMap,
 }
 
@@ -30,10 +27,6 @@ impl Build {
             .sources()
             .map(|s| Source::new(s.into()))
             .collect()
-    }
-
-    pub fn dependency_hash(&self) -> DependencyHash {
-        (&self.dependency_hash).into()
     }
 
     pub fn forward_src_position(
@@ -110,15 +103,15 @@ impl Build {
 impl Build {
     #[tracing::instrument(skip_all, fields( doc = uri.as_str().split("/").last().unwrap() ))]
     pub fn create(state: &State, uri: &Uri, prev_build: Option<Arc<Self>>) -> anyhow::Result<Self> {
-        let (ref mut pending_maps, dependency_hash, mut emit_buffer) = {
+        let (ref mut pending_maps, mut emit_buffer, count_sources) = {
             if let Some(pb) = prev_build {
                 (
                     Vec::with_capacity(pb.source_map.get_token_count() as usize),
-                    Vec::with_capacity(pb.sources().len()),
                     String::with_capacity(pb.emit_text.len()),
+                    pb.sources().len(),
                 )
             } else {
-                (vec![], vec![], String::new())
+                (vec![], String::new(), 0)
             }
         };
 
@@ -126,7 +119,6 @@ impl Build {
         emit_buffer.push_str(uri.as_str().split("/").last().unwrap());
         emit_buffer.push_str("' */\n");
 
-        let count_sources = dependency_hash.len();
         let mut ctx = EmitCtx {
             state,
             dst_line: 1,
@@ -134,7 +126,6 @@ impl Build {
             pending_maps,
             visited_sources: HashSet::<SourceHash>::with_capacity(count_sources),
             defult_document: &state.get_default_doc(),
-            dependency_hash,
         };
 
         emit_wrapper(&mut ctx, uri)?;
@@ -164,7 +155,7 @@ impl Build {
             .join(PROXY_WORKSPACE)
             .join(format!("{ident}.js"));
         let emit_uri = Uri::from_file_path(emit_path).unwrap();
-        let build = Self::new(ctx.emit_buffer, emit_uri, ctx.dependency_hash, source_map);
+        let build = Self::new(ctx.emit_buffer, emit_uri, source_map);
 
         Ok(build)
     }
@@ -179,7 +170,6 @@ struct EmitCtx<'a> {
 
     visited_sources: HashSet<SourceHash>,
     emit_buffer: String,
-    dependency_hash: Vec<DependencyHash>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -225,8 +215,6 @@ fn emit(ctx: &mut EmitCtx, target: &Uri) -> anyhow::Result<()> {
         true => return Ok(()),
         false => ctx.visited_sources.insert(d.source_hash),
     };
-
-    ctx.dependency_hash.push(d.dependency_hash);
 
     let _ = emit(ctx, ctx.defult_document);
 
