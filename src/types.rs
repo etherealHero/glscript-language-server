@@ -188,64 +188,67 @@ impl std::ops::Deref for DocumentLinkStatement {
 }
 
 /**
- * PendingMap
+ * SourceMapBuilder
  */
 
-#[derive(Constructor)]
-pub struct PendingMap {
-    dst_line: usize,
-    dst_col: usize,
-    src_line: usize,
-    src_col: usize,
-    source: Option<Arc<Source>>,
+pub struct SourceMapBuilder {
+    pub tokens: Vec<sourcemap::RawToken>,
+    sources: Vec<Arc<str>>,
+    source_map: fxhash::FxHashMap<Arc<str>, u32>,
+
+    #[cfg(debug_assertions)]
+    source_contents: Vec<Option<Arc<str>>>,
 }
 
-impl PendingMap {
-    #[tracing::instrument(skip_all)]
-    pub fn into_sourcemap(maps: &Vec<PendingMap>, _state: &State) -> sourcemap::SourceMap {
-        type SrcId = u32;
+impl SourceMapBuilder {
+    pub fn with_capacity(tokens_capacity: usize, sources_capacity: usize) -> Self {
+        Self {
+            tokens: Vec::with_capacity(tokens_capacity),
+            sources: Vec::with_capacity(sources_capacity),
+            source_map: fxhash::FxHashMap::default(),
 
-        let mut smb = sourcemap::SourceMapBuilder::new(None);
-        let add = |smb: &mut sourcemap::SourceMapBuilder, m: &PendingMap| -> SrcId {
-            let t = smb.add(
-                m.dst_line as u32,
-                m.dst_col as u32,
-                m.src_line as u32,
-                m.src_col as u32,
-                m.source.as_ref().map(|v| &*v.as_str()),
-                None,
-                false,
-            );
+            #[cfg(debug_assertions)]
+            source_contents: Vec::with_capacity(sources_capacity),
+        }
+    }
 
-            t.src_id
+    pub fn add_source_with_id(&mut self, source: Arc<str>) -> u32 {
+        let count = self.sources.len() as u32;
+        let id = *self.source_map.entry(source.clone()).or_insert(count);
+        if id == count {
+            self.sources.push(source.into());
+        }
+        id
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn into_sourcemap(mut self, state: &State) -> sourcemap::SourceMap {
+        let project = state.get_project();
+        if self.sources.len() > self.source_contents.len() {
+            self.source_contents.resize(self.sources.len(), None);
+        }
+        for (id, source) in self.sources.iter().enumerate() {
+            let ref doc_uri = Uri::from_file_path(project.join(source.as_ref())).unwrap();
+            let contents = state.get_doc(doc_uri).unwrap().buffer.to_string();
+            self.source_contents[id as usize] = Some(contents.into());
+        }
+
+        let contents = match self.source_contents.is_empty() {
+            false => Some(self.source_contents),
+            true => None,
         };
 
-        #[cfg(debug_assertions)]
-        {
-            let project = _state.get_project();
-            let mut sources = std::collections::HashMap::<u32, Arc<Source>>::new();
+        let mut sm = sourcemap::SourceMap::new(None, self.tokens, vec![], self.sources, contents);
+        sm.set_source_root(None::<Arc<str>>);
+        sm.set_debug_id(None);
+        sm
+    }
 
-            for m in maps {
-                let src_id = add(&mut smb, m);
-                if let (Some(source), false) = (&m.source, sources.contains_key(&src_id)) {
-                    sources.insert(src_id, source.clone());
-                }
-            }
-
-            for (src_id, source) in sources {
-                let ref doc_uri = Uri::from_file_path(project.join(source.as_str())).unwrap();
-                let ref contents = _state.get_doc(doc_uri).unwrap().buffer.to_string();
-                smb.set_source_contents(src_id, Some(contents));
-            }
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            for m in maps {
-                add(&mut smb, m);
-            }
-        }
-
-        smb.into_sourcemap()
+    #[cfg(not(debug_assertions))]
+    pub fn into_sourcemap(self, _state: &State) -> sourcemap::SourceMap {
+        let mut sm = sourcemap::SourceMap::new(None, self.tokens, vec![], self.sources, None);
+        sm.set_source_root(None::<Arc<str>>);
+        sm.set_debug_id(None);
+        sm
     }
 }

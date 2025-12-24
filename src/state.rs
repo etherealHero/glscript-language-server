@@ -152,18 +152,16 @@ impl State {
             .or_insert(vec![(client_doc_changes, is_doc_dependency_changed)]);
     }
 
-    fn forward_client_doc_changes(&self, source_uri: &Uri) {
-        let path = match self.uri_to_path(source_uri) {
-            Ok(p) => p,
-            Err(_) => return,
-        };
+    fn forward_client_doc_changes(&self) {
+        use rayon::prelude::*;
 
-        if let Some((_, changes)) = self.unforwarded_doc_changes.remove(&path) {
-            tracing::info!(
-                "forward doc changes({}) {:?}",
-                changes.len(),
-                path.iter().last().unwrap()
-            );
+        self.unforwarded_doc_changes.par_iter().for_each(|entry| {
+            let (path, changes) = (entry.key(), entry.value());
+            // tracing::info!(
+            //     "forward doc changes({}) {:?}",
+            //     changes.len(),
+            //     path.iter().last().unwrap()
+            // );
             let doc_uri = &Uri::from_file_path(path).unwrap();
             for (client_params, dependency_changed) in changes {
                 let client_params_doc = self.get_doc(&client_params.text_document.uri).unwrap();
@@ -195,12 +193,12 @@ impl State {
                 let new_build_of_doc_with_version = self.set_build(doc_uri);
                 let forward_params = lsp::DidChangeTextDocumentParams {
                     text_document: lsp::VersionedTextDocumentIdentifier {
-                        uri: new_build_of_doc_with_version.build.emit_uri.clone(),
+                        uri: new_build_of_doc_with_version.build.uri.clone(),
                         version: new_build_of_doc_with_version.version,
                     },
-                    content_changes: if dependency_changed {
+                    content_changes: if *dependency_changed {
                         vec![lsp::TextDocumentContentChangeEvent {
-                            text: new_build_of_doc_with_version.build.emit_text.clone(),
+                            text: new_build_of_doc_with_version.build.content.clone(),
                             range_length: None,
                             range: None,
                         }]
@@ -211,7 +209,9 @@ impl State {
 
                 self.add_build_changes(doc_uri, forward_params);
             }
-        }
+        });
+
+        self.unforwarded_doc_changes.clear();
     }
 
     fn add_build_changes(
@@ -240,14 +240,14 @@ impl State {
             Err(_) => return,
         };
 
-        self.forward_client_doc_changes(source_uri);
+        self.forward_client_doc_changes();
 
         if let Some((_, changes)) = self.uncommitted_build_changes.remove(&path) {
-            tracing::info!(
-                "commit build changes({}) {:?}",
-                changes.len(),
-                path.iter().last().unwrap()
-            );
+            // tracing::info!(
+            //     "commit build changes({}) {:?}",
+            //     changes.len(),
+            //     path.iter().last().unwrap()
+            // );
             for change in changes {
                 let _ = service.did_change(change);
             }
@@ -262,12 +262,12 @@ impl State {
 
         match self.builds.get_mut(path) {
             Some(mut b) => {
-                let new_build = Build::create(&self, source_uri, Some(b.build.clone())).unwrap();
+                let new_build = Build::create(&self, source_uri, Some(b.build.clone()));
                 b.build = new_build.into();
                 b.version += 1;
             }
             None => {
-                let new_build = Build::create(&self, source_uri, None).unwrap();
+                let new_build = Build::create(&self, source_uri, None);
                 let build_with_version = BuildWithVersion::new(new_build.into(), 1);
                 self.builds.insert(path.into(), build_with_version);
             }
@@ -296,7 +296,7 @@ impl State {
         let emit_uri_canonicalized = emit_uri.canonicalize();
         self.builds
             .iter()
-            .find(|e| e.build.emit_uri.canonicalize() == emit_uri_canonicalized)
+            .find(|e| e.build.uri.canonicalize() == emit_uri_canonicalized)
             .map(|e| e.build.clone())
     }
 

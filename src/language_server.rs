@@ -86,10 +86,10 @@ impl LanguageServer for Proxy {
             let build_with_version = self.state.set_build(&doc.uri);
             let _ = self.server().did_open(lsp::DidOpenTextDocumentParams {
                 text_document: lsp::TextDocumentItem::new(
-                    build_with_version.build.emit_uri.clone(),
+                    build_with_version.build.uri.clone(),
                     JS_LANG_ID.into(),
                     build_with_version.version,
-                    build_with_version.build.emit_text.clone(),
+                    build_with_version.build.content.clone(),
                 ),
             });
         } else {
@@ -145,7 +145,7 @@ impl LanguageServer for Proxy {
         match self.state.get_build(uri) {
             Some(b) => {
                 let _ = self.server().did_close(lsp::DidCloseTextDocumentParams {
-                    text_document: lsp::TextDocumentIdentifier::new(b.emit_uri.clone()),
+                    text_document: lsp::TextDocumentIdentifier::new(b.uri.clone()),
                 });
                 self.state.remove_build(uri);
             }
@@ -197,7 +197,7 @@ impl LanguageServer for Proxy {
             }
 
             *pos = build_pos.expect("is some");
-            *uri = build.emit_uri.clone();
+            *uri = build.uri.clone();
 
             let hover: ResReq<R::HoverRequest> = service.hover(params).await;
             let hover = hover.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))?;
@@ -265,7 +265,7 @@ impl LanguageServer for Proxy {
             }
 
             *pos = req_build_pos.expect("is some");
-            *uri = req_build.emit_uri.clone();
+            *uri = req_build.uri.clone();
 
             let res: ResReq<R::GotoDefinition> = service.definition(params).await;
             let res = res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e));
