@@ -11,9 +11,9 @@ use derive_more::Constructor;
 use crate::forward::{ForwardingLayer, TService};
 use crate::state::State;
 
-pub const JS_LANG_ID: &'static str = "javascript";
-pub const DECL_FILE_EXT: &'static str = ".d.ts";
-pub const PROXY_WORKSPACE: &'static str = "./.local/gls-proxy-workspace";
+pub const JS_LANG_ID: &str = "javascript";
+pub const DECL_FILE_EXT: &str = ".d.ts";
+pub const PROXY_WORKSPACE: &str = "./.local/gls-proxy-workspace";
 
 pub type ResFut<R> = BoxFuture<'static, Result<<R as Request>::Result, ResponseError>>;
 pub type ResReq<R> = Result<<R as Request>::Result, async_lsp::Error>;

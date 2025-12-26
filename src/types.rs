@@ -19,74 +19,45 @@ pub struct BuildWithVersion {
 #[derive(Debug, Clone)]
 pub struct Document {
     pub path: Arc<PathBuf>,
+    pub build_uri: Arc<Uri>,
 
     pub source: Arc<Source>,
     pub source_ident: Arc<DocumentIdentifier>,
     pub source_hash: SourceHash,
 
-    pub tokens: Arc<Vec<Token<'static>>>,
-    pub tokens_source: Arc<String>,
-    pub dependency_hash: DependencyHash,
+    #[allow(unused)]
+    /// need for tokens lifetime
+    pub content: Arc<String>,
     pub buffer: Arc<ropey::Rope>,
+    pub tokens: Arc<Vec<Token<'static>>>,
 
+    pub dependency_hash: DependencyHash,
     pub decl_stmt: Arc<DocumentDeclarationStatement>,
     pub link_stmt: Arc<DocumentLinkStatement>,
 }
 
-/**
- * Source
- */
-
-// TODO: refactor with from IncludeToken, SourceMap::Token, LSP Uri
+// TODO: refactor with from SourceMap::Token, LSP Uri (< SourceUri)
 #[derive(Debug, Eq, PartialEq, Hash, Clone, From, Into, Deref, Display, Constructor)]
 pub struct Source(String);
-
-impl Source {
-    pub fn to_uri(&self, st: &State) -> anyhow::Result<Uri> {
-        let source_uri = Uri::from_file_path(st.get_project().join(&self.0))
-            .map_err(|_| anyhow::Error::msg("invalid source"))?;
-
-        Ok(source_uri)
-    }
-}
-
-/**
- * DependencyHash
- */
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deref)]
 pub struct DependencyHash(u64);
 
-impl From<&Vec<Token<'_>>> for DependencyHash {
-    fn from(tokens: &Vec<Token>) -> Self {
-        let ref mut hasher = fxhash::FxHasher64::default();
+impl From<Arc<Vec<Token<'_>>>> for DependencyHash {
+    fn from(tokens: Arc<Vec<Token>>) -> Self {
+        let hasher = &mut fxhash::FxHasher64::default();
 
-        for t in tokens {
-            match t {
-                Token::IncludePath(token) => {
-                    token.line_col.col.hash(hasher);
-                    token.line_col.line.hash(hasher);
-                    token.text.hash(hasher);
-                }
-                _ => {}
+        for t in tokens.iter() {
+            if let Token::IncludePath(token) = t {
+                token.line_col.col.hash(hasher);
+                token.line_col.line.hash(hasher);
+                token.path.hash(hasher);
             }
         }
 
         Self(hasher.finish())
     }
 }
-
-impl From<&Vec<DependencyHash>> for DependencyHash {
-    fn from(hashes: &Vec<DependencyHash>) -> Self {
-        let ref mut hasher = fxhash::FxHasher64::default();
-        hashes.iter().for_each(|h| h.hash(hasher));
-        Self(hasher.finish())
-    }
-}
-
-/**
- * SourceHash
- */
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deref)]
 pub struct SourceHash(u64);
@@ -97,11 +68,7 @@ impl SourceHash {
     }
 }
 
-/**
- * DocumentIdentifier
- */
-
-/// compatibility ECMAScript identifier hash from [`S ource`]
+/// compatibility ECMAScript identifier hash from [`Source`]
 #[derive(Debug, Clone, Deref)]
 pub struct DocumentIdentifier(Source);
 
@@ -113,26 +80,18 @@ impl DocumentIdentifier {
     }
 }
 
-/**
- * Statements
- */
-pub const IDENTIFIER_PREFIX: &'static str = "$MODULE_";
-
-/**
- * DocumentDeclarationStatement
- */
+pub const IDENTIFIER_PREFIX: &str = "$MODULE_";
+const LINK_START_STMT: &str = "\n/** {@link ";
+const LEFT_OFFSET: usize = LINK_START_STMT.len();
 
 #[derive(Debug, Clone, Deref)]
 pub struct DocumentDeclarationStatement(String);
 
 impl DocumentDeclarationStatement {
-    /// returns module declaration statement:
-    /// ```js
-    /// \n/** @typedef {'%source%'} %identifier% */{};\n
-    /// ```
-    pub fn new(source: &Source, identifier: &DocumentIdentifier) -> Self {
-        const DECL_START_STMT: &'static str = "\n/** @typedef";
-        let mut stmt = String::from(DECL_START_STMT);
+    pub fn create(source: &Source, identifier: &DocumentIdentifier) -> Self {
+        const DECL_START_STMT: &str = "\n/** @typedef";
+        let mut stmt = String::with_capacity(!0u8 as usize);
+        stmt.push_str(DECL_START_STMT);
         stmt.push_str(" {'");
         stmt.push_str(source);
         stmt.push_str("'} ");
@@ -143,58 +102,39 @@ impl DocumentDeclarationStatement {
     }
 }
 
-/**
- * DocumentLinkStatement
- */
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deref, Constructor)]
 pub struct DocumentLinkStatement {
-    pub left_offset: usize,
-    pub right_offset: usize,
+    pub left_offset: u32,
+    pub right_offset: u32,
+    #[deref]
     stmt: String,
 }
 
 impl DocumentLinkStatement {
-    /// returns module link statement:
-    /// ```js
-    /// \n/** {@link %identifier%} */{};\n
-    /// ```
-    pub fn new(source: &Source, identifier: &DocumentIdentifier) -> Self {
-        const LINK_START_STMT: &'static str = "/** {@link ";
-        let left_offset = LINK_START_STMT.len();
-        let right_offset = left_offset + IDENTIFIER_PREFIX.len() + identifier.len();
-        let mut stmt = String::from("\n");
-
+    pub fn create(source: &Source, identifier: &DocumentIdentifier) -> Self {
+        let right_offset = LEFT_OFFSET + IDENTIFIER_PREFIX.len() + identifier.len();
+        let mut stmt = String::with_capacity(!0u8 as usize);
         stmt.push_str(LINK_START_STMT);
         stmt.push_str(IDENTIFIER_PREFIX);
         stmt.push_str(identifier);
         stmt.push_str(" '");
         stmt.push_str(source);
         stmt.push_str("'} */{};\n");
+        Self::new(LEFT_OFFSET as u32, right_offset as u32, stmt)
+    }
 
-        Self {
-            stmt,
-            left_offset,
-            right_offset,
-        }
+    pub fn undefined() -> Self {
+        const RIGHT_OFFSET: usize = LEFT_OFFSET + IDENTIFIER_PREFIX.len() + 1;
+        const SUFFIX: &str = "0 '0'} */{};\n";
+        let undefined_stmt = LINK_START_STMT.to_owned() + IDENTIFIER_PREFIX + SUFFIX;
+        Self::new(LEFT_OFFSET as u32, RIGHT_OFFSET as u32, undefined_stmt)
     }
 }
-
-impl std::ops::Deref for DocumentLinkStatement {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        &self.stmt
-    }
-}
-
-/**
- * SourceMapBuilder
- */
 
 pub struct SourceMapBuilder {
     pub tokens: Vec<sourcemap::RawToken>,
-    sources: Vec<Arc<str>>,
-    source_map: fxhash::FxHashMap<Arc<str>, u32>,
+    sources: Vec<Arc<Source>>,
+    source_map: fxhash::FxHashMap<Arc<Source>, u32>,
 
     #[cfg(debug_assertions)]
     source_contents: Vec<Option<Arc<str>>>,
@@ -212,41 +152,48 @@ impl SourceMapBuilder {
         }
     }
 
-    pub fn add_source_with_id(&mut self, source: Arc<str>) -> u32 {
+    pub fn add_source_with_id(&mut self, source: Arc<Source>) -> u32 {
         let count = self.sources.len() as u32;
         let id = *self.source_map.entry(source.clone()).or_insert(count);
         if id == count {
-            self.sources.push(source.into());
+            self.sources.push(source);
         }
         id
     }
 
-    #[cfg(debug_assertions)]
-    pub fn into_sourcemap(mut self, state: &State) -> sourcemap::SourceMap {
-        let project = state.get_project();
-        if self.sources.len() > self.source_contents.len() {
-            self.source_contents.resize(self.sources.len(), None);
+    #[allow(unused_mut)]
+    pub fn into_sourcemap(mut self, _state: &State) -> sourcemap::SourceMap {
+        let contents;
+
+        #[cfg(debug_assertions)]
+        {
+            let project = _state.get_project();
+            if self.sources.len() > self.source_contents.len() {
+                self.source_contents.resize(self.sources.len(), None);
+            }
+            for (id, source) in self.sources.iter().enumerate() {
+                let path = source.as_str();
+                let doc_uri = _state.path_to_uri(&project.join(path)).unwrap();
+                let contents = _state.get_doc(&doc_uri).unwrap().buffer.to_string();
+                self.source_contents[id] = Some(contents.into());
+            }
+
+            contents = match self.source_contents.is_empty() {
+                false => Some(self.source_contents),
+                true => None,
+            };
         }
-        for (id, source) in self.sources.iter().enumerate() {
-            let ref doc_uri = Uri::from_file_path(project.join(source.as_ref())).unwrap();
-            let contents = state.get_doc(doc_uri).unwrap().buffer.to_string();
-            self.source_contents[id as usize] = Some(contents.into());
+
+        #[cfg(not(debug_assertions))]
+        {
+            contents = None
         }
 
-        let contents = match self.source_contents.is_empty() {
-            false => Some(self.source_contents),
-            true => None,
-        };
+        let sources = self.sources.iter();
+        let sources = sources.map(|s| s.as_str().into()).collect();
 
-        let mut sm = sourcemap::SourceMap::new(None, self.tokens, vec![], self.sources, contents);
-        sm.set_source_root(None::<Arc<str>>);
-        sm.set_debug_id(None);
-        sm
-    }
+        let mut sm = sourcemap::SourceMap::new(None, self.tokens, vec![], sources, contents);
 
-    #[cfg(not(debug_assertions))]
-    pub fn into_sourcemap(self, _state: &State) -> sourcemap::SourceMap {
-        let mut sm = sourcemap::SourceMap::new(None, self.tokens, vec![], self.sources, None);
         sm.set_source_root(None::<Arc<str>>);
         sm.set_debug_id(None);
         sm

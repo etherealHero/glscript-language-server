@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
@@ -7,13 +7,10 @@ use derive_more::Constructor;
 use sourcemap::SourceMap;
 
 use crate::parser::{LineCol, Token};
-use crate::proxy::PROXY_WORKSPACE;
 use crate::state::State;
-use crate::types::{
-    DocumentIdentifier, DocumentLinkStatement, Source, SourceHash, SourceMapBuilder,
-};
+use crate::types::{DocumentLinkStatement, Source, SourceHash, SourceMapBuilder};
 
-pub const BUILD_FILE: &'static str = "build.js.emitted";
+pub const BUILD_FILE: &str = "build.js.emitted";
 
 #[derive(Debug, Constructor)]
 pub struct Build {
@@ -45,7 +42,7 @@ impl Build {
         }
 
         for t in self.source_map.tokens() {
-            if t.get_source() != Some(&pos_source) {
+            if t.get_source() != Some(pos_source) {
                 continue;
             }
             if t.get_src_line() == pos.line && t.get_src_col() <= pos.character {
@@ -80,8 +77,7 @@ impl Build {
 
     pub fn forward_build_position(&self, pos: &lsp::Position) -> Option<(lsp::Position, Source)> {
         match self.source_map.lookup_token(pos.line, pos.character) {
-            Some(t) if t.get_source().is_none() => return None,
-            None => return None,
+            Some(t) if t.get_source().is_none() => None,
             Some(t) => {
                 let line = t.get_src_line();
                 let character = t.get_src_col() + (pos.character - t.get_dst_col());
@@ -91,6 +87,7 @@ impl Build {
                     Source::new(source.into()),
                 ))
             }
+            _ => None,
         }
     }
 
@@ -128,19 +125,28 @@ impl Build {
             Context::new(state, default_doc, visited)
         };
 
+        let (tokens_count_ref, source_map_ref) = (OnceLock::new(), OnceLock::new());
         let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
         let mut emit_content_state = Emit::WithDstContent(initial_buf);
         let mut emit_sourcemap_state = Emit::WithSourceMapBuilderAndDstLine(builder, 1);
         let content_task = || Emit::content(&mut emit_content_state, &mut new_ctx(), uri);
-        let sourcemap_task = || Emit::sourcemap(&mut emit_sourcemap_state, &mut new_ctx(), uri);
+        let sourcemap_task = || {
+            Emit::sourcemap(&mut emit_sourcemap_state, &mut new_ctx(), uri);
+            let (tokens_count, source_map) = match emit_sourcemap_state.finish(state) {
+                EmitResult::TokensCountAndSourceMap(count, sm) => (count, sm),
+                _ => unreachable!(),
+            };
+            tokens_count_ref.set(tokens_count).unwrap();
+            source_map_ref.set(source_map).unwrap();
+        };
 
         // TODO: rebuild only sourcemap on dep_hash eq prev
         rayon::join(sourcemap_task, content_task);
 
-        let (tokens_count, source_map) = match emit_sourcemap_state.finish(state) {
-            EmitResult::TokensCountAndSourceMap(count, sm) => (count, sm),
-            _ => unreachable!(),
-        };
+        let (tokens_count, source_map) = (
+            tokens_count_ref.into_inner().unwrap(),
+            source_map_ref.into_inner().unwrap(),
+        );
         let content = match emit_content_state.finish(state) {
             EmitResult::Content(content) => content,
             _ => unreachable!(),
@@ -160,13 +166,7 @@ impl Build {
             let _ = std::fs::write(state.get_project().join(BUILD_FILE), build);
         }
 
-        // TODO: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
-        let ident = state.get_doc(uri).unwrap().source_ident.to_string();
-        let emit_path = state
-            .get_project()
-            .join(PROXY_WORKSPACE)
-            .join(format!("{ident}.js"));
-        let emit_uri = Uri::from_file_path(emit_path).unwrap();
+        let emit_uri = (*state.get_doc(uri).unwrap().build_uri).clone();
 
         Self::new(content, emit_uri, source_map, tokens_count)
     }
@@ -180,7 +180,7 @@ struct Context<'a> {
 }
 
 enum Emit {
-    WithSourceMapBuilderAndDstLine(SourceMapBuilder, usize),
+    WithSourceMapBuilderAndDstLine(SourceMapBuilder, u32),
     WithDstContent(String),
 }
 
@@ -202,21 +202,21 @@ impl Emit {
 
 /// SourceMap
 impl Emit {
-    fn add_source(&mut self, source: Arc<str>) -> u32 {
+    fn add_source(&mut self, source: Arc<Source>) -> u32 {
         match self {
             Emit::WithSourceMapBuilderAndDstLine(builder, _) => builder.add_source_with_id(source),
             _ => unreachable!(),
         }
     }
 
-    fn add_token(&mut self, dst_col: usize, src_line: usize, src_col: usize, src_id: u32) {
+    fn add_token(&mut self, dst_col: u32, src_line: u32, src_col: u32, src_id: u32) {
         match self {
             Emit::WithSourceMapBuilderAndDstLine(builder, dst_line) => {
                 builder.tokens.push(sourcemap::RawToken {
-                    dst_line: *dst_line as u32,
-                    dst_col: dst_col as u32,
-                    src_line: src_line as u32,
-                    src_col: src_col as u32,
+                    dst_line: *dst_line,
+                    dst_col,
+                    src_line,
+                    src_col,
                     src_id,
                     name_id: !0,
                     is_range: false,
@@ -233,20 +233,25 @@ impl Emit {
         };
     }
 
+    // #[tracing::instrument(skip_all)]
+    // fn sm_time(st: &mut Emit, ctx: &mut Context, target: &Uri) {
+    //     Emit::sourcemap(st, ctx, target);
+    // }
+
     fn sourcemap(st: &mut Emit, ctx: &mut Context, target: &Uri) {
         let d = match ctx.proxy_state.get_doc(target) {
             Ok(doc) => doc,
             Err(_) => return,
         };
         let (source, path, tokens) = (&d.source, &d.path, d.tokens.iter());
-        let src_id = st.add_source(source.as_str().into());
+        let src_id = st.add_source(source.clone());
 
         match ctx.visited_sources.contains(&d.source_hash) {
             true => return,
             false => ctx.visited_sources.insert(d.source_hash),
         };
 
-        let _ = Emit::sourcemap(st, ctx, ctx.defult_document);
+        Emit::sourcemap(st, ctx, ctx.defult_document);
 
         // DocumentDeclarationStatement
         st.line_break();
@@ -255,9 +260,9 @@ impl Emit {
 
         let mut lt_ro_skip = false;
         let mut lt_ro = false;
-        let mut lt_ro_offset = 0;
+        let mut lt_ro_offset = 0u32;
         let add_map =
-            |dst_col: usize, pos: &LineCol, st: &mut Emit, lt_ro: bool, lt_ro_offset: usize| {
+            |dst_col: u32, pos: &LineCol, st: &mut Emit, lt_ro: bool, lt_ro_offset: u32| {
                 let dst_col = match lt_ro {
                     true => dst_col + lt_ro_offset,
                     false => dst_col,
@@ -269,42 +274,43 @@ impl Emit {
             match t {
                 Token::Include(t) => add_map(t.line_col.col, &t.line_col, st, lt_ro, lt_ro_offset),
                 Token::IncludePath(t) => {
-                    // TODO: optimize
-                    let (line, col) = (t.line_col.line, t.line_col.col);
-                    let dep_lit = t.text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
-                    let dep_path = ctx.proxy_state.path_resolver(&path, dep_lit);
-                    let dep_uri = &Uri::from_file_path(dep_path.as_path()).unwrap();
-                    let dep_link = ctx
-                        .proxy_state
-                        .get_doc(dep_uri)
-                        .and_then(|d| Ok(d.link_stmt.clone()))
-                        .unwrap_or_else(|_| {
-                            let ref undefined_source = Source::new(dep_lit.into());
-                            let undefined_ident = &DocumentIdentifier::new(undefined_source);
-                            DocumentLinkStatement::new(undefined_source, undefined_ident).into()
-                        });
+                    let dep_path = ctx.proxy_state.path_resolver(path, t.path);
+                    let dep_uri = ctx.proxy_state.path_to_uri(&dep_path);
+                    let (left_offset, right_offset, doc_uri) = if let Ok(uri) = dep_uri {
+                        if let Ok(d) = ctx.proxy_state.get_doc(&uri) {
+                            (d.link_stmt.left_offset, d.link_stmt.right_offset, Some(uri))
+                        } else {
+                            let stmt = DocumentLinkStatement::undefined();
+                            (stmt.left_offset, stmt.right_offset, None)
+                        }
+                    } else {
+                        let stmt = DocumentLinkStatement::undefined();
+                        (stmt.left_offset, stmt.right_offset, None)
+                    };
 
-                    // DocumentLinkStatement
                     st.line_break();
-                    st.add_token(dep_link.left_offset, line, col, src_id);
-                    st.add_token(dep_link.right_offset, 0, 0, !0);
+                    st.add_token(left_offset, t.line_col.line, t.line_col.col, src_id);
+                    st.add_token(right_offset, 0, 0, !0);
                     st.line_break();
 
-                    Emit::sourcemap(st, ctx, dep_uri);
+                    if let Some(target) = doc_uri {
+                        Emit::sourcemap(st, ctx, &target);
+                    }
 
-                    // traling statements after include statement on the same line
-                    st.line_break();
+                    st.line_break(); // traling statements after include path on current line
                 }
                 Token::RegionOpen(t) => {
                     add_map(0, &t.line_col, st, lt_ro, lt_ro_offset);
-                    (lt_ro_skip = true, lt_ro_offset = t.len);
+                    lt_ro_skip = true;
+                    lt_ro_offset = t.len;
                 }
                 Token::LineTerminator(_) if lt_ro_skip => {
-                    (lt_ro_skip = false, lt_ro = true);
+                    lt_ro_skip = false;
+                    lt_ro = true;
                 }
                 Token::RegionClose(t) => add_map(0, &t.line_col, st, lt_ro, lt_ro_offset),
                 Token::LineTerminator(t) => {
-                    add_map(t.col, &t, st, lt_ro, lt_ro_offset);
+                    add_map(t.col, t, st, lt_ro, lt_ro_offset);
                     lt_ro = false;
                     st.line_break();
                 }
@@ -314,7 +320,7 @@ impl Emit {
                     st.line_break();
                 }
                 Token::Common(t) => add_map(t.line_col.col, &t.line_col, st, lt_ro, lt_ro_offset),
-                Token::EOI(t) => add_map(t.col, &t, st, lt_ro, lt_ro_offset),
+                Token::Eoi(t) => add_map(t.col, t, st, lt_ro, lt_ro_offset),
             }
         }
     }
@@ -336,6 +342,11 @@ impl Emit {
         }
     }
 
+    // #[tracing::instrument(skip_all)]
+    // fn content_time(st: &mut Emit, ctx: &mut Context, target: &Uri) {
+    //     Emit::content(st, ctx, target);
+    // }
+
     fn content(st: &mut Emit, ctx: &mut Context, target: &Uri) {
         let d = match ctx.proxy_state.get_doc(target) {
             Ok(doc) => doc,
@@ -356,25 +367,20 @@ impl Emit {
             match t {
                 Token::Include(t) => (0..t.len).for_each(|_| st.push(' ')),
                 Token::IncludePath(t) => {
-                    let dep_lit = t.text.trim_matches(|c| ['\'', '"', '<', '>'].contains(&c));
-                    let dep_path = ctx.proxy_state.path_resolver(&path, dep_lit);
-                    let dep_uri = &Uri::from_file_path(dep_path.as_path()).unwrap();
-                    let dep_link = ctx
-                        .proxy_state
-                        .get_doc(dep_uri)
-                        .and_then(|d| Ok(d.link_stmt.clone()))
-                        .unwrap_or_else(|_| {
-                            let ref undefined_source = Source::new(dep_lit.into());
-                            let undefined_ident = &DocumentIdentifier::new(undefined_source);
-                            DocumentLinkStatement::new(undefined_source, undefined_ident).into()
-                        });
+                    let dep_path = ctx.proxy_state.path_resolver(path, t.path);
+                    if let Ok(dep_uri) = ctx.proxy_state.path_to_uri(&dep_path) {
+                        if let Ok(dep_doc) = ctx.proxy_state.get_doc(&dep_uri) {
+                            st.push_str(&dep_doc.link_stmt);
+                            Emit::content(st, ctx, &dep_uri);
+                        } else {
+                            st.push_str(&DocumentLinkStatement::undefined())
+                        };
+                    } else {
+                        st.push_str(&DocumentLinkStatement::undefined());
+                    };
 
-                    st.push_str(&dep_link);
-                    Emit::content(st, ctx, dep_uri);
-
-                    // traling statements after include statement on the same line
-                    st.push('\n');
-                    (0..(t.line_col.col + t.len)).for_each(|_| st.push(' '));
+                    st.push('\n'); // traling statements after include path on current line
+                    (0..(t.line_col.col + t.path.len() as u32 + 2)).for_each(|_| st.push(' '));
                 }
                 Token::RegionOpen(t) => {
                     lt_ro_skip = true;
@@ -392,7 +398,7 @@ impl Emit {
                 Token::LineTerminator(_) => st.push('\n'),
                 Token::CommonWithLineEnding(t) => st.push_str(t.text),
                 Token::Common(t) => st.push_str(t.text),
-                Token::EOI(_) => {}
+                Token::Eoi(_) => {}
             }
         }
     }

@@ -22,8 +22,8 @@ impl LanguageServer for Proxy {
     type NotifyResult = ControlFlow<async_lsp::Result<()>>;
 
     fn initialize(&mut self, mut params: lsp::InitializeParams) -> ResFut<R::Initialize> {
-        const _GLSCRIPT_INDEXING_TOKEN: &'static str = "glscript_indexing";
-        const JSCONFIG: &'static str = "jsconfig.json";
+        const _GLSCRIPT_INDEXING_TOKEN: &str = "glscript_indexing";
+        const JSCONFIG: &str = "jsconfig.json";
 
         // FIXME: if node_modules not installed show user error
         // FIXME: if client not has workspace_folders show client Error message for open Project Folder
@@ -63,8 +63,11 @@ impl LanguageServer for Proxy {
     }
 
     fn shutdown(&mut self, (): <R::Shutdown as Request>::Params) -> ResFut<R::Shutdown> {
-        let _ = self.server().shutdown(());
-        Box::pin(async move { Ok(()) })
+        let mut service = self.server();
+        Box::pin(async move {
+            let _ = service.shutdown(()).await;
+            Ok(())
+        })
     }
 
     fn exit(&mut self, (): <N::Exit as Notification>::Params) -> Self::NotifyResult {
@@ -110,7 +113,7 @@ impl LanguageServer for Proxy {
         }
 
         let doc = self.state.get_doc(uri).unwrap();
-        let hash_prev = doc.dependency_hash.clone();
+        let hash_prev = doc.dependency_hash;
 
         // 1. apply changes to raw document
         self.state.set_doc(uri, &params.content_changes);
@@ -118,7 +121,7 @@ impl LanguageServer for Proxy {
 
         // 2. forward params into language server
         let mut docs_for_changes = self.state.get_builds_contains_source(&doc.source);
-        docs_for_changes.sort_by(|a, b| (*a != *doc.path).cmp(&(*b != *doc.path)));
+        docs_for_changes.sort_by_key(|a| *a != *doc.path);
 
         assert_eq!(docs_for_changes.first(), Some(&*doc.path));
 
@@ -160,15 +163,15 @@ impl LanguageServer for Proxy {
         let pos = &params.text_document_position_params.position;
 
         // TODO: create util
-        let build: Arc<Build>;
-        match self.state.get_build(uri) {
+
+        let build: Arc<Build> = match self.state.get_build(uri) {
+            Some(b) => b,
             None => {
                 return Box::pin(async move {
                     let res: ResReq<R::HoverRequest> = service.hover(params).await;
                     res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
                 });
             }
-            Some(b) => build = b,
         };
 
         self.state.commit_build_changes(uri, &mut service);
@@ -178,7 +181,7 @@ impl LanguageServer for Proxy {
         let decl_req = self.definition(lsp::GotoDefinitionParams {
             text_document_position_params: lsp::TextDocumentPositionParams::new(
                 lsp::TextDocumentIdentifier::new(uri.clone()),
-                pos.clone(),
+                pos.to_owned(),
             ),
             work_done_progress_params: lsp::WorkDoneProgressParams::default(),
             partial_result_params: lsp::PartialResultParams::default(),
@@ -208,10 +211,10 @@ impl LanguageServer for Proxy {
 
             let mut hover = strip_module_hash(hover.expect("is some"));
 
-            if let Some(mut r) = hover.range {
-                if !forward_build_range(&mut r, &build).is_ok_and(|source| source == *req_source) {
-                    hover.range = None
-                }
+            if let Some(mut r) = hover.range
+                && !forward_build_range(&mut r, &build).is_ok_and(|source| source == *req_source)
+            {
+                hover.range = None
             }
 
             // TODO: skip awaiting decl on empty hover. ^^^ Check hover.is_none()
@@ -234,15 +237,14 @@ impl LanguageServer for Proxy {
         let uri = &params.text_document_position_params.text_document.uri;
 
         // TODO: create util
-        let req_build: Arc<Build>;
-        match self.state.get_build(uri) {
+        let req_build: Arc<Build> = match self.state.get_build(uri) {
+            Some(b) => b,
             None => {
                 return Box::pin(async move {
                     let res: ResReq<R::GotoDefinition> = service.definition(params).await;
                     res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
                 });
             }
-            Some(b) => req_build = b,
         };
 
         self.state.commit_build_changes(uri, &mut service);
@@ -274,6 +276,7 @@ impl LanguageServer for Proxy {
                 return res;
             }
 
+            let project = state.get_project();
             let forward_location_links = |links: Vec<lsp::LocationLink>| -> Result<_, _> {
                 let mut forward_links = HashSet::with_capacity(links.len());
                 for mut link in links {
@@ -297,7 +300,8 @@ impl LanguageServer for Proxy {
 
                         forward_build_range(&mut link.target_selection_range, any_build)?;
 
-                        link.target_uri = source.to_uri(&state).unwrap();
+                        let path = &project.join(source.as_str());
+                        link.target_uri = state.path_to_uri(path).unwrap();
                         link.origin_selection_range = None;
                         forward_links.insert(HashLocationLink(link));
                         continue;
@@ -316,7 +320,7 @@ impl LanguageServer for Proxy {
                     .into_iter()
                     .map(|mut h| {
                         if let Ok(path) = state.uri_to_path(&h.0.target_uri) {
-                            h.0.target_uri = Uri::from_file_path(path).unwrap();
+                            h.0.target_uri = state.path_to_uri(&path).unwrap();
                         }
                         h.0
                     })
@@ -388,7 +392,7 @@ type DefRes = lsp::GotoDefinitionResponse;
 
 #[inline]
 fn forward_build_range(range: &mut lsp::Range, build: &Build) -> Result<Source, ResponseError> {
-    let source_range = build.forward_build_range(&range);
+    let source_range = build.forward_build_range(range);
     if source_range.is_none() {
         let err = format!("Forward back build range `{:?}` failed", range);
         return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));

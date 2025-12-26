@@ -1,6 +1,6 @@
 use std::fs;
 use std::mem::transmute;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use crate::builder::Build;
@@ -29,6 +29,7 @@ pub struct State {
     uncommitted_build_changes: DashMap<PathBuf, Vec<lsp::DidChangeTextDocumentParams>>,
 
     uri_to_path: DashMap<Uri, PathBuf>,
+    path_to_uri: DashMap<PathBuf, Uri>,
     path_resolver_cache: DashMap<(PathBuf, String), Arc<PathBuf>>,
 }
 
@@ -37,19 +38,19 @@ impl State {
     // FIXME: some script duplicated. Validate uri_to_path fn
     pub fn set_doc(&self, source_uri: &Uri, changes: &[lsp::TextDocumentContentChangeEvent]) {
         let path_uri = self.uri_to_path(source_uri).unwrap();
-        let (source, ident, source_hash, decl_stmt, link_stmt, path, buffer) = {
-            if let Some(d) = self.documents.get(&path_uri) {
-                (
-                    Some(d.source.clone()),
-                    Some(d.source_ident.clone()),
-                    Some(d.source_hash.clone()),
-                    Some(d.decl_stmt.clone()),
-                    Some(d.link_stmt.clone()),
-                    Some(d.path.clone()),
-                    Some((*d.buffer).clone()),
-                )
-            } else {
-                (None, None, None, None, None, None, None)
+        let (source, ident, source_hash, decl_stmt, link_stmt, path, build_uri, buffer) = {
+            match self.documents.get(&path_uri) {
+                Some(doc) => (
+                    Some(doc.source.clone()),
+                    Some(doc.source_ident.clone()),
+                    Some(doc.source_hash),
+                    Some(doc.decl_stmt.clone()),
+                    Some(doc.link_stmt.clone()),
+                    Some(doc.path.clone()),
+                    Some(doc.build_uri.clone()),
+                    Some((*doc.buffer).clone()),
+                ),
+                None => (None, None, None, None, None, None, None, None),
             }
         };
 
@@ -62,21 +63,29 @@ impl State {
         // tracing::info!("{source:?}");
 
         let ident = ident.unwrap_or(DocumentIdentifier::new(&source).into());
-        let source_hash = source_hash.unwrap_or(SourceHash::new(&source).into());
+        let source_hash = source_hash.unwrap_or(SourceHash::new(&source));
         let path = path.unwrap_or(path_uri.clone().into());
+        // TODO: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
+        let build_uri = build_uri.unwrap_or_else(|| {
+            let ident = ident.as_str();
+            let proxy_ws = self.get_project().join(PROXY_WORKSPACE);
+            let emit_path = proxy_ws.join(format!("{ident}.js"));
+            Uri::from_file_path(emit_path).unwrap().into()
+        });
         let decl_stmt =
-            decl_stmt.unwrap_or(DocumentDeclarationStatement::new(&source, &ident).into());
-        let link_stmt = link_stmt.unwrap_or(DocumentLinkStatement::new(&source, &ident).into());
+            decl_stmt.unwrap_or(DocumentDeclarationStatement::create(&source, &ident).into());
+        let link_stmt = link_stmt.unwrap_or(DocumentLinkStatement::create(&source, &ident).into());
         let mut buffer = buffer.unwrap_or(Rope::new());
         let insert_doc = |p: PathBuf, text: &str, buffer: Rope| {
-            let tokens_source = Arc::new(text.to_string());
-            let binding = tokens_source.clone();
-            let tokens = parse(&binding, &self);
-            let tokens_static = unsafe { transmute::<Vec<Token<'_>>, Vec<Token<'static>>>(tokens) };
-            let tokens = Arc::new(tokens_static);
+            let content = Arc::new(text.to_string());
+            let content_ref = content.clone();
+            let tokens = parse(&content_ref, self);
+            let tokens = unsafe { transmute::<Vec<Token<'_>>, Vec<Token<'static>>>(tokens) };
+            let tokens = Arc::new(tokens);
+
             let doc = Document {
-                tokens_source,
-                dependency_hash: (&*tokens.clone()).into(),
+                content,
+                dependency_hash: tokens.clone().into(),
                 tokens,
                 buffer: buffer.into(),
                 decl_stmt,
@@ -85,13 +94,14 @@ impl State {
                 source_ident: ident,
                 source_hash,
                 path,
+                build_uri,
             };
             self.documents.insert(p, doc)
         };
 
         if changes.len() == 1 && changes[0].range.is_none() {
             let new_text = changes[0].text.as_str();
-            buffer = Rope::from_str(new_text).into();
+            buffer = Rope::from_str(new_text);
             insert_doc(path_uri, new_text, buffer);
             return;
         }
@@ -106,16 +116,16 @@ impl State {
             buffer.insert(start, text);
         }
 
-        let full_text = buffer.to_string();
-        insert_doc(path_uri, &full_text, buffer);
+        let full_text = &buffer.to_string();
+        insert_doc(path_uri, full_text, buffer);
     }
 
     pub fn get_doc(&self, source_uri: &Uri) -> anyhow::Result<Document> {
         let path = &self.uri_to_path(source_uri)?;
         let doc = self.documents.get(path);
 
-        if doc.is_some() {
-            return Ok(doc.unwrap().clone());
+        if let Some(d) = doc {
+            return Ok(d.clone());
         }
 
         if !path.is_file() {
@@ -162,7 +172,7 @@ impl State {
             //     changes.len(),
             //     path.iter().last().unwrap()
             // );
-            let doc_uri = &Uri::from_file_path(path).unwrap();
+            let doc_uri = &self.path_to_uri(path).unwrap();
             for (client_params, dependency_changed) in changes {
                 let client_params_doc = self.get_doc(&client_params.text_document.uri).unwrap();
                 let client_params_doc_source = client_params_doc.source;
@@ -262,12 +272,12 @@ impl State {
 
         match self.builds.get_mut(path) {
             Some(mut b) => {
-                let new_build = Build::create(&self, source_uri, Some(b.build.clone()));
+                let new_build = Build::create(self, source_uri, Some(b.build.clone()));
                 b.build = new_build.into();
                 b.version += 1;
             }
             None => {
-                let new_build = Build::create(&self, source_uri, None);
+                let new_build = Build::create(self, source_uri, None);
                 let build_with_version = BuildWithVersion::new(new_build.into(), 1);
                 self.builds.insert(path.into(), build_with_version);
             }
@@ -277,12 +287,12 @@ impl State {
     }
 
     pub fn get_build(&self, source_uri: &Uri) -> Option<Arc<Build>> {
-        let ref path = match self.uri_to_path(source_uri) {
+        let path = match self.uri_to_path(source_uri) {
             Ok(p) => p,
             Err(_) => return None,
         };
 
-        self.builds.get(path).map(|guard| guard.build.clone())
+        self.builds.get(&path).map(|guard| guard.build.clone())
     }
 
     pub fn remove_build(&self, source_uri: &Uri) {
@@ -324,75 +334,79 @@ impl State {
     pub fn get_default_doc(&self) -> Uri {
         let path = self.project_path.get().unwrap();
         let path = path.join(PROXY_WORKSPACE).join("DEFAULT_INCLUDED.js");
-        Uri::from_file_path(path).unwrap()
+        self.path_to_uri(&path).unwrap()
     }
 }
 
 impl State {
-    /// returns caonnicalized path
+    /// returns canonicalized [`PathBuf`]
     #[inline]
     pub fn uri_to_path(&self, uri: &Uri) -> anyhow::Result<PathBuf> {
-        let ref uri = uri.canonicalize();
-        if let Some(source_path) = self.uri_to_path.get(uri) {
-            return Ok(source_path.clone());
+        if let Some(canonicalized_path) = self.uri_to_path.get(uri) {
+            return Ok(canonicalized_path.clone());
         }
 
-        let sp = uri.to_file_path();
-        let sp = sp.map_err(|_| anyhow::anyhow!("uri to file path fail: {uri}"))?;
-        let sp = dunce::canonicalize(dunce::simplified(&sp))?;
+        let path = uri.to_file_path();
+        let path = path.map_err(|_| anyhow::anyhow!("uri to file path fail: {uri}"))?;
+        let canonicalized_path = dunce::canonicalize(dunce::simplified(&path))?;
 
-        self.uri_to_path.insert(uri.clone(), sp.clone());
-        Ok(sp)
+        self.uri_to_path
+            .insert(uri.clone(), canonicalized_path.clone());
+
+        Ok(canonicalized_path)
     }
 
+    /// returns canonicalized [`Uri`]
     #[inline]
-    pub fn path_resolver(&self, path_from: &Path, include_literal: &str) -> Arc<PathBuf> {
-        if let Some(resolved_path) = self
-            .path_resolver_cache
-            .get(&(path_from.into(), include_literal.to_string()))
-        {
+    pub fn path_to_uri(&self, path: &Path) -> anyhow::Result<Uri> {
+        if let Some(canonicalized_uri) = self.path_to_uri.get(path) {
+            return Ok(canonicalized_uri.clone());
+        }
+
+        let canonicalized_path = &dunce::canonicalize(dunce::simplified(path))?;
+        let uri = Uri::from_file_path(canonicalized_path);
+        let uri = uri.map_err(|_| anyhow::anyhow!("path to uri fail: {path:?}"))?;
+        let canonicalized_uri = uri.canonicalize();
+
+        self.path_to_uri
+            .insert(path.to_path_buf(), canonicalized_uri.clone());
+
+        Ok(canonicalized_uri)
+    }
+
+    pub fn path_resolver(&self, path_from: &Path, path_literal: &str) -> Arc<PathBuf> {
+        let key = (path_from.into(), path_literal.to_string());
+        if let Some(resolved_path) = self.path_resolver_cache.get(&key) {
             return resolved_path.clone();
         }
 
-        let project_root: &Path = &self.get_project();
-        let path = include_literal.replace("\\\\", "/").replace("\\", "/");
-        let resolved_path: Arc<PathBuf>;
+        let is_relative = |path: &str| {
+            path.starts_with("./")
+                || path.starts_with(".\\")
+                || path.starts_with("../")
+                || path.starts_with("..\\")
+        };
 
-        if Self::is_relative_path(&path) {
-            let path_from_dir = path_from.parent().unwrap_or(project_root);
-            resolved_path = Self::normalize_path(&path_from_dir.join(path)).into();
-        } else {
-            resolved_path = Self::normalize_path(&project_root.join(path)).into();
-        }
-
-        self.path_resolver_cache.insert(
-            (path_from.into(), include_literal.to_string()),
-            resolved_path.clone(),
-        );
-
-        resolved_path
-    }
-
-    #[inline]
-    fn is_relative_path(path: &str) -> bool {
-        path.starts_with("./")
-            || path.starts_with(".\\")
-            || path.starts_with("../")
-            || path.starts_with("..\\")
-    }
-
-    #[inline]
-    fn normalize_path(path: &Path) -> PathBuf {
-        let mut buf = PathBuf::new();
-        for component in path.components() {
-            match component {
-                std::path::Component::ParentDir => {
-                    buf.pop().eq(&false).then(|| buf.push(".."));
-                }
-                std::path::Component::CurDir => {}
-                _ => buf.push(component.as_os_str()),
+        #[allow(clippy::unit_arg)]
+        let normilize = |path: &Path| {
+            let mut buf = PathBuf::new();
+            for component in path.components() {
+                match component {
+                    Component::ParentDir => buf.pop().eq(&false).then(|| buf.push("..")),
+                    Component::CurDir => None,
+                    _ => buf.push(component.as_os_str()).into(),
+                };
             }
-        }
-        buf
+            buf
+        };
+
+        let path = path_literal.replace("\\\\", "/").replace("\\", "/");
+        let resolved_path: Arc<PathBuf> = match is_relative(&path) {
+            true => normilize(&path_from.parent().unwrap().join(path)).into(),
+            false => normilize(&self.get_project().join(path)).into(),
+        };
+
+        self.path_resolver_cache.insert(key, resolved_path.clone());
+        resolved_path
     }
 }
