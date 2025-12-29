@@ -374,6 +374,24 @@ impl LanguageServer for Proxy {
                 })
         })
     }
+
+    fn signature_help(
+        &mut self,
+        mut params: lsp::SignatureHelpParams,
+    ) -> ResFut<R::SignatureHelpRequest> {
+        let mut service = self.server();
+        let uri = &params.text_document_position_params.text_document.uri;
+        let build = try_ensure_build!(self, uri, params, signature_help);
+        let state = self.state.clone();
+        Box::pin(async move {
+            let doc_pos = &mut params.text_document_position_params;
+            try_forward_text_document_position_params!(state, build, doc_pos);
+            service
+                .signature_help(params)
+                .await
+                .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+        })
+    }
 }
 
 type DefRes = lsp::GotoDefinitionResponse;
