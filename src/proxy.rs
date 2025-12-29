@@ -76,3 +76,45 @@ impl Proxy {
         (server, client)
     }
 }
+
+#[macro_export]
+macro_rules! try_ensure_build {
+    (
+        $self:expr,
+        $uri:expr,
+        $params:expr,
+        $method:ident
+    ) => {{
+        if let Some(build) = $self.state.get_build($uri) {
+            $self.state.commit_build_changes($uri, &mut $self.server());
+            build
+        } else {
+            let mut service = $self.server();
+            return Box::pin(async move {
+                let res = service.$method($params).await;
+                res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+            });
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! try_forward_text_document_position_params {
+    (
+        $state:expr,
+        $build:expr,
+        $text_document_position_params:expr
+    ) => {{
+        let uri = &mut $text_document_position_params.text_document.uri;
+        let pos = &mut $text_document_position_params.position;
+        let source = $state.get_doc(uri).unwrap().source.clone();
+
+        if let Some(build_pos) = $build.forward_src_position(pos, &source) {
+            *pos = build_pos;
+            *uri = $build.uri.clone();
+        } else {
+            let err = format!("Forward src position `{pos:?}` failed");
+            return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
+        };
+    }};
+}

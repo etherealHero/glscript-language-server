@@ -1,6 +1,5 @@
 use std::fs;
 use std::ops::ControlFlow;
-use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
@@ -13,6 +12,7 @@ use crate::types::{IDENTIFIER_PREFIX, Source};
 
 use crate::proxy::{Canonicalize, DECL_FILE_EXT, JS_LANG_ID, PROXY_WORKSPACE};
 use crate::proxy::{Proxy, ResFut, ResReq, ResReqProxy};
+use crate::{try_ensure_build, try_forward_text_document_position_params};
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -141,14 +141,13 @@ impl LanguageServer for Proxy {
 
     fn did_close(&mut self, params: lsp::DidCloseTextDocumentParams) -> Self::NotifyResult {
         let uri = &params.text_document.uri;
-        match self.state.get_build(uri) {
-            Some(b) => {
-                let _ = self.server().did_close(lsp::DidCloseTextDocumentParams {
-                    text_document: lsp::TextDocumentIdentifier::new(b.uri.clone()),
-                });
-                self.state.remove_build(uri);
-            }
-            None => self.server().did_close(params).expect("did close"),
+        if let Some(build) = self.state.get_build(uri) {
+            let _ = self.server().did_close(lsp::DidCloseTextDocumentParams {
+                text_document: lsp::TextDocumentIdentifier::new(build.uri.clone()),
+            });
+            self.state.remove_build(uri);
+        } else {
+            self.server().did_close(params).expect("did close")
         }
         ControlFlow::Continue(())
     }
@@ -157,23 +156,9 @@ impl LanguageServer for Proxy {
         let mut service = self.server();
         let uri = &params.text_document_position_params.text_document.uri;
         let pos = &params.text_document_position_params.position;
-
-        // TODO: create util
-
-        let build: Arc<Build> = match self.state.get_build(uri) {
-            Some(b) => b,
-            None => {
-                return Box::pin(async move {
-                    let res: ResReq<R::HoverRequest> = service.hover(params).await;
-                    res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
-                });
-            }
-        };
-
-        self.state.commit_build_changes(uri, &mut service);
+        let build = try_ensure_build!(self, uri, params, hover);
 
         // TODO: send cancel req on timeout
-        let req_source = self.state.get_doc(uri).unwrap().source.clone();
         let decl_req = self.definition(lsp::GotoDefinitionParams {
             text_document_position_params: lsp::TextDocumentPositionParams::new(
                 lsp::TextDocumentIdentifier::new(uri.clone()),
@@ -182,21 +167,12 @@ impl LanguageServer for Proxy {
             work_done_progress_params: lsp::WorkDoneProgressParams::default(),
             partial_result_params: lsp::PartialResultParams::default(),
         });
+        let state = self.state.clone();
+        let req_source = state.get_doc(uri).unwrap().source.clone();
 
         Box::pin(async move {
-            let uri = &mut params.text_document_position_params.text_document.uri;
-            let pos = &mut params.text_document_position_params.position;
-
-            // TODO: create util
-            let build_pos = build.forward_src_position(pos, &req_source);
-
-            if build_pos.is_none() {
-                let err = format!("Forward src position `{pos:?}` failed");
-                return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
-            }
-
-            *pos = build_pos.expect("is some");
-            *uri = build.uri.clone();
+            let doc_pos = &mut params.text_document_position_params;
+            try_forward_text_document_position_params!(state, build, doc_pos);
 
             let hover: ResReq<R::HoverRequest> = service.hover(params).await;
             let hover = hover.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))?;
@@ -231,39 +207,13 @@ impl LanguageServer for Proxy {
     fn definition(&mut self, mut params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
         let mut service = self.server();
         let uri = &params.text_document_position_params.text_document.uri;
-
-        // TODO: create util
-        let req_build: Arc<Build> = match self.state.get_build(uri) {
-            Some(b) => b,
-            None => {
-                return Box::pin(async move {
-                    let res: ResReq<R::GotoDefinition> = service.definition(params).await;
-                    res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
-                });
-            }
-        };
-
-        self.state.commit_build_changes(uri, &mut service);
-
+        let req_build = try_ensure_build!(self, uri, params, definition);
         let req_build_sources = req_build.sources();
         let state = self.state.clone();
 
         Box::pin(async move {
             let doc_pos = &mut params.text_document_position_params;
-            let uri = &mut doc_pos.text_document.uri;
-            let pos = &mut doc_pos.position;
-
-            // TODO: create util
-            let req_source = state.get_doc(uri).unwrap().source.clone();
-            let req_build_pos = req_build.forward_src_position(pos, &req_source);
-
-            if req_build_pos.is_none() {
-                let err = format!("Forward src position `{pos:?}` failed");
-                return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
-            }
-
-            *pos = req_build_pos.expect("is some");
-            *uri = req_build.uri.clone();
+            try_forward_text_document_position_params!(state, req_build, doc_pos);
 
             let res: ResReq<R::GotoDefinition> = service.definition(params).await;
             let res = res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e));
@@ -377,16 +327,57 @@ impl LanguageServer for Proxy {
     }
 
     fn code_lens(&mut self, params: lsp::CodeLensParams) -> ResFut<R::CodeLensRequest> {
-        let mut service = self.server();
-        let uri = params.text_document.uri;
-        self.state.commit_build_changes(&uri, &mut service);
+        let uri = &params.text_document.uri;
+        try_ensure_build!(self, uri, params, code_lens);
         Box::pin(async move { Ok(Some(vec![])) })
+    }
+
+    fn completion(&mut self, mut params: lsp::CompletionParams) -> ResFut<R::Completion> {
+        let mut service = self.server();
+        let uri = &params.text_document_position.text_document.uri;
+        let build = try_ensure_build!(self, uri, params, completion);
+        let state = self.state.clone();
+        Box::pin(async move {
+            type Res = lsp::CompletionResponse;
+            let forward = forward_build_completion_item;
+            let doc_pos = &mut params.text_document_position;
+            try_forward_text_document_position_params!(state, build, doc_pos);
+
+            service
+                .completion(params)
+                .await
+                .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+                .map(|r| r.unwrap())
+                .map(|mut response| {
+                    match response {
+                        Res::Array(ref mut items) => items.iter_mut().for_each(forward),
+                        Res::List(ref mut list) => list.items.iter_mut().for_each(forward),
+                    };
+                    Some(response)
+                })
+        })
+    }
+
+    fn completion_item_resolve(
+        &mut self,
+        params: lsp::CompletionItem,
+    ) -> ResFut<R::ResolveCompletionItem> {
+        let mut service = self.server();
+        Box::pin(async move {
+            service
+                .completion_item_resolve(params)
+                .await
+                .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+                .map(|mut res| {
+                    forward_build_completion_item(&mut res);
+                    res
+                })
+        })
     }
 }
 
 type DefRes = lsp::GotoDefinitionResponse;
 
-#[inline]
 fn forward_build_range(range: &mut lsp::Range, build: &Build) -> Result<Source, ResponseError> {
     let source_range = build.forward_build_range(range);
     if source_range.is_none() {
@@ -398,7 +389,6 @@ fn forward_build_range(range: &mut lsp::Range, build: &Build) -> Result<Source, 
     Ok(source_range.1)
 }
 
-#[inline]
 fn prepend_hover(mut hover: lsp::Hover, msg: &str) -> lsp::Hover {
     type H = lsp::HoverContents;
     type S = lsp::MarkedString;
@@ -418,7 +408,6 @@ fn prepend_hover(mut hover: lsp::Hover, msg: &str) -> lsp::Hover {
     hover
 }
 
-#[inline]
 fn strip_module_hash(mut hover: lsp::Hover) -> lsp::Hover {
     type H = lsp::HoverContents;
     type S = lsp::MarkedString;
@@ -464,4 +453,10 @@ impl PartialEq for HashLocationLink {
             && self.0.target_range == other.0.target_range
             && self.0.target_uri.canonicalize() == other.0.target_uri.canonicalize()
     }
+}
+
+fn forward_build_completion_item(item: &mut lsp::CompletionItem) {
+    item.text_edit = None; // can't define context
+    item.additional_text_edits = None;
+    item.command = None;
 }
