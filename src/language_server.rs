@@ -118,15 +118,11 @@ impl LanguageServer for Proxy {
         // 1. apply changes to raw document
         self.state.set_doc(uri, &params.content_changes);
         let hash_new = self.state.get_doc(uri).unwrap().dependency_hash;
+        let dep_changed = hash_prev != hash_new;
 
         // 2. forward params into language server
-        let mut docs_for_changes = self.state.get_builds_contains_source(&doc.source);
-        docs_for_changes.sort_by_key(|a| *a != *doc.path);
-
-        assert_eq!(docs_for_changes.first(), Some(&*doc.path));
-
-        for path in docs_for_changes {
-            let dep_changed = hash_prev != hash_new;
+        let builds_contains_source = self.state.get_builds_contains_source(&doc.source);
+        for path in builds_contains_source {
             let params = params.clone();
             self.state.add_client_doc_changes(path, params, dep_changed);
         }

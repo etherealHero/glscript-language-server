@@ -22,13 +22,12 @@ pub struct Document {
     pub build_uri: Arc<Uri>,
 
     pub source: Arc<Source>,
-    pub source_ident: Arc<DocumentIdentifier>,
     pub source_hash: SourceHash,
 
     #[allow(unused)]
     /// need for tokens lifetime
     pub content: Arc<String>,
-    pub buffer: Arc<ropey::Rope>,
+    pub buffer: ropey::Rope,
     pub tokens: Arc<Vec<Token<'static>>>,
 
     pub dependency_hash: DependencyHash,
@@ -43,8 +42,8 @@ pub struct Source(String);
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deref)]
 pub struct DependencyHash(u64);
 
-impl From<Arc<Vec<Token<'_>>>> for DependencyHash {
-    fn from(tokens: Arc<Vec<Token>>) -> Self {
+impl From<&Vec<Token<'_>>> for DependencyHash {
+    fn from(tokens: &Vec<Token>) -> Self {
         let hasher = &mut fxhash::FxHasher64::default();
 
         for t in tokens.iter() {

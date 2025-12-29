@@ -37,87 +37,77 @@ pub struct State {
 impl State {
     // FIXME: some script duplicated. Validate uri_to_path fn
     pub fn set_doc(&self, source_uri: &Uri, changes: &[lsp::TextDocumentContentChangeEvent]) {
-        let path_uri = self.uri_to_path(source_uri).unwrap();
-        let (source, ident, source_hash, decl_stmt, link_stmt, path, build_uri, buffer) = {
-            match self.documents.get(&path_uri) {
-                Some(doc) => (
-                    Some(doc.source.clone()),
-                    Some(doc.source_ident.clone()),
-                    Some(doc.source_hash),
-                    Some(doc.decl_stmt.clone()),
-                    Some(doc.link_stmt.clone()),
-                    Some(doc.path.clone()),
-                    Some(doc.build_uri.clone()),
-                    Some((*doc.buffer).clone()),
-                ),
-                None => (None, None, None, None, None, None, None, None),
-            }
+        type RefMut<'a> = dashmap::mapref::one::RefMut<'a, PathBuf, Document>;
+        let path = self.uri_to_path(source_uri).unwrap();
+        let mut doc = if let Some(old_doc) = self.documents.get_mut(&path) {
+            old_doc
+        } else {
+            let source = {
+                let source = &path.strip_prefix(self.get_project()).unwrap().to_str();
+                let source = source.ok_or(anyhow::anyhow!("existed source of project"));
+                let source = source.unwrap().to_lowercase().replace('\\', "/");
+                Source::new(source)
+            };
+
+            let source_ident = DocumentIdentifier::new(&source);
+
+            let build_uri = {
+                // TODO: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
+                let proxy_ws = self.get_project().join(PROXY_WORKSPACE);
+                let emit_path = proxy_ws.join(format!("{}.js", source_ident.as_str()));
+                Uri::from_file_path(emit_path).unwrap()
+            };
+
+            let doc = Document {
+                path: path.clone().into(),
+                build_uri: build_uri.into(),
+
+                buffer: Rope::new(),
+                tokens: vec![].into(),
+                content: String::new().into(),
+                dependency_hash: Into::into(&vec![]),
+
+                decl_stmt: DocumentDeclarationStatement::create(&source, &source_ident).into(),
+                link_stmt: DocumentLinkStatement::create(&source, &source_ident).into(),
+
+                source_hash: SourceHash::new(&source),
+                source: source.into(),
+            };
+
+            self.documents.insert(path.clone(), doc);
+            self.documents.get_mut(&path).unwrap()
         };
 
-        let source = source.unwrap_or_else(|| {
-            let source = &path_uri.strip_prefix(self.get_project()).unwrap().to_str();
-            let source = source.ok_or(anyhow::anyhow!("existed source of project"));
-            let source = source.unwrap().to_lowercase().replace('\\', "/");
-            Source::new(source).into()
-        });
-        // tracing::info!("{source:?}");
-
-        let ident = ident.unwrap_or(DocumentIdentifier::new(&source).into());
-        let source_hash = source_hash.unwrap_or(SourceHash::new(&source));
-        let path = path.unwrap_or(path_uri.clone().into());
-        // TODO: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
-        let build_uri = build_uri.unwrap_or_else(|| {
-            let ident = ident.as_str();
-            let proxy_ws = self.get_project().join(PROXY_WORKSPACE);
-            let emit_path = proxy_ws.join(format!("{ident}.js"));
-            Uri::from_file_path(emit_path).unwrap().into()
-        });
-        let decl_stmt =
-            decl_stmt.unwrap_or(DocumentDeclarationStatement::create(&source, &ident).into());
-        let link_stmt = link_stmt.unwrap_or(DocumentLinkStatement::create(&source, &ident).into());
-        let mut buffer = buffer.unwrap_or(Rope::new());
-        let insert_doc = |p: PathBuf, text: &str, buffer: Rope| {
-            let content = Arc::new(text.to_string());
+        let patch_doc_content = |doc: &mut RefMut<'_>, content: &str| {
+            let content = Arc::new(content.to_string());
             let content_ref = content.clone();
             let tokens = parse(&content_ref, self);
             let tokens = unsafe { transmute::<Vec<Token<'_>>, Vec<Token<'static>>>(tokens) };
-            let tokens = Arc::new(tokens);
 
-            let doc = Document {
-                content,
-                dependency_hash: tokens.clone().into(),
-                tokens,
-                buffer: buffer.into(),
-                decl_stmt,
-                link_stmt,
-                source,
-                source_ident: ident,
-                source_hash,
-                path,
-                build_uri,
-            };
-            self.documents.insert(p, doc)
+            doc.dependency_hash = Into::into(&tokens);
+            doc.tokens = tokens.into();
+            doc.content = content;
         };
 
         if changes.len() == 1 && changes[0].range.is_none() {
             let new_text = changes[0].text.as_str();
-            buffer = Rope::from_str(new_text);
-            insert_doc(path_uri, new_text, buffer);
+            doc.buffer = Rope::from_str(new_text);
+            patch_doc_content(&mut doc, new_text);
             return;
         }
 
         for change in changes {
             let r = change.range.as_ref().unwrap();
             let text = change.text.as_str();
-            let start = buffer.line_to_char(r.start.line as usize) + r.start.character as usize;
-            let end = buffer.line_to_char(r.end.line as usize) + r.end.character as usize;
+            let start = doc.buffer.line_to_char(r.start.line as usize) + r.start.character as usize;
+            let end = doc.buffer.line_to_char(r.end.line as usize) + r.end.character as usize;
 
-            buffer.remove(start..end);
-            buffer.insert(start, text);
+            doc.buffer.remove(start..end);
+            doc.buffer.insert(start, text);
         }
 
-        let full_text = &buffer.to_string();
-        insert_doc(path_uri, full_text, buffer);
+        let full_text = &doc.buffer.to_string();
+        patch_doc_content(&mut doc, full_text);
     }
 
     pub fn get_doc(&self, source_uri: &Uri) -> anyhow::Result<Document> {
@@ -167,11 +157,6 @@ impl State {
 
         self.unforwarded_doc_changes.par_iter().for_each(|entry| {
             let (path, changes) = (entry.key(), entry.value());
-            // tracing::info!(
-            //     "forward doc changes({}) {:?}",
-            //     changes.len(),
-            //     path.iter().last().unwrap()
-            // );
             let doc_uri = &self.path_to_uri(path).unwrap();
             for (client_params, dependency_changed) in changes {
                 let client_params_doc = self.get_doc(&client_params.text_document.uri).unwrap();
@@ -253,11 +238,6 @@ impl State {
         self.forward_client_doc_changes();
 
         if let Some((_, changes)) = self.uncommitted_build_changes.remove(&path) {
-            // tracing::info!(
-            //     "commit build changes({}) {:?}",
-            //     changes.len(),
-            //     path.iter().last().unwrap()
-            // );
             for change in changes {
                 let _ = service.did_change(change);
             }

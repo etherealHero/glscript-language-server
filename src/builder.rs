@@ -233,11 +233,6 @@ impl Emit {
         };
     }
 
-    // #[tracing::instrument(skip_all)]
-    // fn sm_time(st: &mut Emit, ctx: &mut Context, target: &Uri) {
-    //     Emit::sourcemap(st, ctx, target);
-    // }
-
     fn sourcemap(st: &mut Emit, ctx: &mut Context, target: &Uri) {
         let d = match ctx.proxy_state.get_doc(target) {
             Ok(doc) => doc,
@@ -341,11 +336,6 @@ impl Emit {
             _ => unreachable!(),
         }
     }
-
-    // #[tracing::instrument(skip_all)]
-    // fn content_time(st: &mut Emit, ctx: &mut Context, target: &Uri) {
-    //     Emit::content(st, ctx, target);
-    // }
 
     fn content(st: &mut Emit, ctx: &mut Context, target: &Uri) {
         let d = match ctx.proxy_state.get_doc(target) {
