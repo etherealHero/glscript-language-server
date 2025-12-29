@@ -392,6 +392,33 @@ impl LanguageServer for Proxy {
                 .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
         })
     }
+
+    fn references(&mut self, mut params: lsp::ReferenceParams) -> ResFut<R::References> {
+        let mut service = self.server();
+        let uri = &params.text_document_position.text_document.uri;
+        let req_build = try_ensure_build!(self, uri, params, references);
+        let state = self.state.clone();
+        Box::pin(async move {
+            let doc_pos = &mut params.text_document_position;
+            try_forward_text_document_position_params!(state, req_build, doc_pos);
+            let project = state.get_project();
+            service
+                .references(params)
+                .await
+                .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+                .map(|r| r.unwrap())
+                .map(|mut r| {
+                    r.iter_mut().for_each(|l| {
+                        if req_build.uri.canonicalize() == l.uri.canonicalize()
+                            && let Ok(source) = forward_build_range(&mut l.range, &req_build)
+                        {
+                            l.uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                        };
+                    });
+                    Some(r)
+                })
+        })
+    }
 }
 
 type DefRes = lsp::GotoDefinitionResponse;
