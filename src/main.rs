@@ -48,13 +48,8 @@ async fn main() {
     let stdout = tokio::io::stdout().compat_write();
     let main2 = tokio::spawn(mock_server.run_buffered(stdin, stdout));
 
-    let ret = tokio::select! {
+    let _ = tokio::select! {
         ret = main1 => ret,
         ret = main2 => ret,
     };
-
-    ret.map_err(|e| format!("setup proxy transport error: {e}"))
-        .expect("setup proxy transport")
-        .map_err(|e| format!("proxy lifecycle error: {e}"))
-        .expect("proxy lifecycle");
 }

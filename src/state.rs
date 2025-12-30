@@ -178,10 +178,7 @@ impl State {
                             range_length: change.range_length,
                             text: change.text.clone(),
                         }),
-                        None => panic!(
-                            "forward_src_range failed on did_change `{:#?}`",
-                            &change.range.unwrap()
-                        ),
+                        None => return, // FIXME: sync docs failed
                     };
                 }
 

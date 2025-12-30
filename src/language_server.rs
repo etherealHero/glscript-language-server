@@ -469,14 +469,27 @@ impl LanguageServer for Proxy {
                 let mut workspace_locations = HashSet::new();
                 let def_source = state.get_doc(&def_loc.target_uri).unwrap().source;
                 let def_pos = &def_loc.target_selection_range.start;
+
+                // TODO: if global context ?
+                // TODO: find module refs OR index repository THEN did_open module refs
                 let builds_contains_source = state.get_builds_contains_source(&def_source);
                 for doc_of_build_path in builds_contains_source {
                     let doc_uri = state.path_to_uri(&doc_of_build_path).unwrap();
+                    state.commit_build_changes(&doc_uri, &mut service);
+
                     let build = state.get_build(&doc_uri).unwrap();
+                    let position = match build.forward_src_position(def_pos, &def_source) {
+                        Some(pos) => pos,
+                        None => {
+                            let err = "Sync docs failed. Request aborted".to_string(); // FIXME:
+                            return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
+                        }
+                    };
+
                     let forwarded_params = lsp::ReferenceParams {
                         text_document_position: lsp::TextDocumentPositionParams::new(
                             lsp::TextDocumentIdentifier::new(build.uri.clone()),
-                            build.forward_src_position(def_pos, &def_source).unwrap(),
+                            position,
                         ),
                         work_done_progress_params: lsp::WorkDoneProgressParams::default(),
                         partial_result_params: lsp::PartialResultParams::default(),
@@ -484,7 +497,6 @@ impl LanguageServer for Proxy {
                     };
 
                     let source_references = fetch(&mut service, forwarded_params, build).await;
-
                     if let Ok(Some(locations)) = source_references {
                         for l in locations.iter() {
                             workspace_locations.insert(l.clone()); // TODO: undistinct links ?
