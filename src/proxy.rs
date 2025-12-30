@@ -12,6 +12,7 @@ use crate::forward::{ForwardingLayer, TService};
 use crate::state::State;
 
 pub const JS_LANG_ID: &str = "javascript";
+pub const JS_FILE_EXT: &str = ".js";
 pub const DECL_FILE_EXT: &str = ".d.ts";
 pub const PROXY_WORKSPACE: &str = "./.local/gls-proxy-workspace";
 

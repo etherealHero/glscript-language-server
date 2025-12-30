@@ -1,5 +1,6 @@
 use std::fs;
 use std::ops::ControlFlow;
+use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
@@ -10,7 +11,7 @@ use async_lsp::{LanguageServer, lsp_types as lsp};
 use crate::builder::{BUILD_FILE, Build};
 use crate::types::{IDENTIFIER_PREFIX, Source};
 
-use crate::proxy::{Canonicalize, DECL_FILE_EXT, JS_LANG_ID, PROXY_WORKSPACE};
+use crate::proxy::{Canonicalize, DECL_FILE_EXT, JS_FILE_EXT, JS_LANG_ID, PROXY_WORKSPACE};
 use crate::proxy::{Proxy, ResFut, ResReq, ResReqProxy};
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
@@ -122,9 +123,10 @@ impl LanguageServer for Proxy {
 
         // 2. forward params into language server
         let builds_contains_source = self.state.get_builds_contains_source(&doc.source);
-        for path in builds_contains_source {
+        for doc_of_build_path in builds_contains_source {
             let params = params.clone();
-            self.state.add_client_doc_changes(path, params, dep_changed);
+            self.state
+                .add_client_doc_changes(doc_of_build_path, params, dep_changed);
         }
 
         // 3. commit req doc
@@ -394,6 +396,115 @@ impl LanguageServer for Proxy {
     }
 
     fn references(&mut self, mut params: lsp::ReferenceParams) -> ResFut<R::References> {
+        // the client sends two requests
+        // and the second request with false obscures the first response
+        let context = lsp::ReferenceContext {
+            include_declaration: true,
+        };
+
+        let uri = &params.text_document_position.text_document.uri;
+        let pos = &params.text_document_position.position;
+        let req_build = try_ensure_build!(self, uri, params, references);
+        let definition_request = self.definition(lsp::GotoDefinitionParams {
+            text_document_position_params: lsp::TextDocumentPositionParams::new(
+                lsp::TextDocumentIdentifier::new(uri.clone()),
+                pos.to_owned(),
+            ),
+            work_done_progress_params: lsp::WorkDoneProgressParams::default(),
+            partial_result_params: lsp::PartialResultParams::default(),
+        });
+
+        let mut service = self.server();
+        let state = self.state.clone();
+
+        Box::pin(async move {
+            let project = state.get_project();
+            let response = definition_request.await.map(|r| r.unwrap());
+            let definition = match response {
+                Ok(ref definition_response) => match definition_response {
+                    DefRes::Link(links) => links.first(),
+                    _ => unreachable!(),
+                },
+                Err(err) => return Err(err),
+            };
+
+            let fetch = async |service: &mut async_lsp::ServerSocket,
+                               build_params: lsp::ReferenceParams,
+                               build: Arc<Build>| {
+                service
+                    .references(build_params)
+                    .await
+                    .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+                    .map(|r| r.unwrap())
+                    .map(|mut r| {
+                        r.iter_mut().for_each(|l| {
+                            if build.uri.canonicalize() == l.uri.canonicalize()
+                                && let Ok(source) = forward_build_range(&mut l.range, &build)
+                            {
+                                l.uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                            }
+                        });
+                        Some(r)
+                    })
+            };
+
+            if let Some(def_loc) = definition {
+                let definition_source_path = def_loc.target_uri.as_str();
+                if definition_source_path.ends_with(DECL_FILE_EXT) {
+                    let doc_pos = &mut params.text_document_position;
+                    try_forward_text_document_position_params!(state, req_build, doc_pos);
+                    return fetch(&mut service, params, req_build).await;
+                }
+
+                if !definition_source_path.ends_with(JS_FILE_EXT) {
+                    let err = format!(
+                        "Missmatched definition source extension,
+                         expect '{JS_FILE_EXT}' or '{DECL_FILE_EXT}'.
+                         References request aborted"
+                    );
+                    let err = err.split_whitespace().collect::<Vec<_>>().join(" ");
+                    return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
+                }
+
+                let mut workspace_locations = HashSet::new();
+                let def_source = state.get_doc(&def_loc.target_uri).unwrap().source;
+                let def_pos = &def_loc.target_selection_range.start;
+                let builds_contains_source = state.get_builds_contains_source(&def_source);
+                for doc_of_build_path in builds_contains_source {
+                    let doc_uri = state.path_to_uri(&doc_of_build_path).unwrap();
+                    let build = state.get_build(&doc_uri).unwrap();
+                    let forwarded_params = lsp::ReferenceParams {
+                        text_document_position: lsp::TextDocumentPositionParams::new(
+                            lsp::TextDocumentIdentifier::new(build.uri.clone()),
+                            build.forward_src_position(def_pos, &def_source).unwrap(),
+                        ),
+                        work_done_progress_params: lsp::WorkDoneProgressParams::default(),
+                        partial_result_params: lsp::PartialResultParams::default(),
+                        context,
+                    };
+
+                    let source_references = fetch(&mut service, forwarded_params, build).await;
+
+                    if let Ok(Some(locations)) = source_references {
+                        for l in locations.iter() {
+                            workspace_locations.insert(l.clone()); // TODO: undistinct links ?
+                        }
+                    }
+                }
+
+                Ok(Some(dbg!(workspace_locations).into_iter().collect()))
+            } else {
+                let err = "Definition of references request not found".to_string();
+                Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err))
+            }
+        })
+    }
+}
+
+impl Proxy {
+    #[allow(unused)]
+    /// plain implementation of references request (without project links, only build context)
+    fn local_references(&mut self, mut params: lsp::ReferenceParams) -> ResFut<R::References> {
         let mut service = self.server();
         let uri = &params.text_document_position.text_document.uri;
         let req_build = try_ensure_build!(self, uri, params, references);

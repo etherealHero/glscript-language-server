@@ -314,7 +314,8 @@ impl State {
     pub fn get_default_doc(&self) -> Uri {
         let path = self.project_path.get().unwrap();
         let path = path.join(PROXY_WORKSPACE).join("DEFAULT_INCLUDED.js");
-        self.path_to_uri(&path).unwrap()
+        let default_doc = self.path_to_uri(&path);
+        default_doc.unwrap_or(Uri::from_file_path(path).unwrap().canonicalize())
     }
 }
 

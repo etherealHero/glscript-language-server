@@ -16,7 +16,7 @@ async fn main() {
     let server = &std::env::args()
         .nth(1)
         .expect("expect argument to the forwarded LSP server");
-    let server_arg = server.contains("tsgo").then_some("--lsp").unwrap_or("");
+    let server_arg = if server.contains("tsgo") { "--lsp" } else { "" };
     let mut child = async_process::Command::new(server)
         .arg(server_arg)
         .arg("--stdio")
