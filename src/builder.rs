@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
@@ -128,32 +128,33 @@ impl Build {
             Context::new(state, default_doc, visited)
         };
 
-        let (tokens_count_ref, source_map_ref) = (OnceLock::new(), OnceLock::new());
-        let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
-        let mut emit_content_state = Emit::WithDstContent(initial_buf);
-        let mut emit_sourcemap_state = Emit::WithSourceMapBuilderAndDstLine(builder, 1);
-        let content_task = || Emit::content(&mut emit_content_state, &mut new_ctx(), uri);
+        {
+            let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
+            let mut emit_state = Emit::WithSourceMapBuilderAndDstLine(builder, 1);
+            Emit::prepare_par_iter(&mut emit_state, &mut new_ctx(), uri);
+            emit_state.finish(state);
+        }
+
         let sourcemap_task = || {
+            let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
+            let mut emit_sourcemap_state = Emit::WithSourceMapBuilderAndDstLine(builder, 1);
             Emit::sourcemap(&mut emit_sourcemap_state, &mut new_ctx(), uri);
-            let (tokens_count, source_map) = match emit_sourcemap_state.finish(state) {
+            match emit_sourcemap_state.finish(state) {
                 EmitResult::TokensCountAndSourceMap(count, sm) => (count, sm),
                 _ => unreachable!(),
-            };
-            tokens_count_ref.set(tokens_count).unwrap();
-            source_map_ref.set(source_map).unwrap();
+            }
+        };
+        let content_task = || {
+            let mut emit_content_state = Emit::WithDstContent(initial_buf);
+            Emit::content(&mut emit_content_state, &mut new_ctx(), uri);
+            match emit_content_state.finish(state) {
+                EmitResult::Content(content) => content,
+                _ => unreachable!(),
+            }
         };
 
         // TODO: rebuild only sourcemap on dep_hash eq prev
-        rayon::join(sourcemap_task, content_task);
-
-        let (tokens_count, source_map) = (
-            tokens_count_ref.into_inner().unwrap(),
-            source_map_ref.into_inner().unwrap(),
-        );
-        let content = match emit_content_state.finish(state) {
-            EmitResult::Content(content) => content,
-            _ => unreachable!(),
-        };
+        let ((tokens_count, source_map), content) = rayon::join(sourcemap_task, content_task);
 
         #[cfg(debug_assertions)]
         {
@@ -198,6 +199,57 @@ enum EmitResult {
 }
 
 impl Emit {
+    #[allow(unused)]
+    #[tracing::instrument(skip_all)]
+    fn prepare_par_iter_wrapper(st: &mut Emit, ctx: &mut Context, target: &Uri) {
+        Emit::prepare_par_iter(st, ctx, target);
+    }
+
+    fn prepare_par_iter(st: &mut Emit, ctx: &mut Context, target: &Uri) {
+        let d = match ctx.proxy_state.get_doc(target) {
+            Ok(doc) => doc,
+            Err(_) => return,
+        };
+        let (path, tokens) = (&d.path, d.tokens.iter());
+        match ctx.visited_sources.contains(&d.source_hash) {
+            true => return,
+            false => ctx.visited_sources.insert(d.source_hash),
+        };
+        Emit::prepare_par_iter(st, ctx, ctx.defult_document);
+        st.line_break(); // < DocumentDeclarationStatement
+        st.line_break(); // <
+        let mut lt_ro_skip = false;
+        for t in tokens {
+            match t {
+                Token::IncludePath(t) => {
+                    let dep_path = ctx.proxy_state.path_resolver(path, t.path);
+                    let dep_uri = ctx.proxy_state.path_to_uri(&dep_path);
+                    let doc_uri = if let Ok(uri) = dep_uri {
+                        match ctx.proxy_state.get_doc(&uri).is_ok() {
+                            true => Some(uri),
+                            false => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    st.line_break(); // < DocumentLinkStatement
+                    st.line_break(); // <
+
+                    if let Some(target) = doc_uri {
+                        Emit::prepare_par_iter(st, ctx, &target);
+                    }
+
+                    st.line_break(); // traling statements after include path on current line
+                }
+                Token::RegionOpen(_) => lt_ro_skip = true,
+                Token::LineTerminator(_) if lt_ro_skip => lt_ro_skip = false,
+                Token::LineTerminator(_) | Token::CommonWithLineEnding(_) => st.line_break(),
+                _ => {}
+            }
+        }
+    }
+
     fn finish(self, state: &State) -> EmitResult {
         match self {
             Emit::WithDstContent(dst_content) => EmitResult::Content(dst_content),

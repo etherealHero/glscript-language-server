@@ -42,15 +42,8 @@ impl State {
         let mut doc = if let Some(old_doc) = self.documents.get_mut(&path) {
             old_doc
         } else {
-            let source = {
-                let source = &path.strip_prefix(self.get_project()).unwrap().to_str();
-                let source = source.ok_or(anyhow::anyhow!("existed source of project"));
-                let source = source.unwrap().to_lowercase().replace('\\', "/");
-                Source::new(source)
-            };
-
+            let source = Source::from_path(&path, self.get_project()).unwrap();
             let source_ident = DocumentIdentifier::new(&source);
-
             let build_uri = {
                 // TODO: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
                 let proxy_ws = self.get_project().join(PROXY_WORKSPACE);

@@ -1,5 +1,5 @@
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_lsp::lsp_types::Url as Uri;
@@ -38,6 +38,26 @@ pub struct Document {
 // TODO: refactor with from SourceMap::Token, LSP Uri (< SourceUri)
 #[derive(Debug, Eq, PartialEq, Hash, Clone, From, Into, Deref, Display, Constructor)]
 pub struct Source(String);
+
+impl Source {
+    pub fn from_path(path: &Path, project: &Path) -> anyhow::Result<Self> {
+        let relative = path.strip_prefix(project).map_err(|_| {
+            anyhow::anyhow!(
+                "Path {} is not relative to project root {}",
+                path.display(),
+                project.display()
+            )
+        })?;
+
+        let source_str = relative
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid UTF-8 in path"))?
+            .to_lowercase()
+            .replace('\\', "/");
+
+        Ok(Source(source_str))
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deref)]
 pub struct DependencyHash(u64);
