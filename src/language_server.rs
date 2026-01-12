@@ -1,4 +1,3 @@
-use std::fs;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use tokio::time::{Duration, timeout};
@@ -8,7 +7,7 @@ use async_lsp::lsp_types::{notification::Notification, request::Request};
 use async_lsp::{ErrorCode, ResponseError};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
-use crate::builder::{BUILD_FILE, Build};
+use crate::builder::{BUILD_FILE_EXT, Build};
 use crate::types::{IDENTIFIER_PREFIX, Source};
 
 use crate::proxy::{Canonicalize, DECL_FILE_EXT, JS_FILE_EXT, JS_LANG_ID, PROXY_WORKSPACE};
@@ -33,12 +32,12 @@ impl LanguageServer for Proxy {
             let ws_dir = &root_ws.uri.to_file_path().unwrap();
             let proxy_ws_dir = &mut ws_dir.clone().join(PROXY_WORKSPACE);
 
-            fs::create_dir_all(&proxy_ws_dir).unwrap();
-            fs::copy(ws_dir.join(JSCONFIG), proxy_ws_dir.join(JSCONFIG)).unwrap();
+            std::fs::create_dir_all(&proxy_ws_dir).unwrap();
+            std::fs::copy(ws_dir.join(JSCONFIG), proxy_ws_dir.join(JSCONFIG)).unwrap();
 
             self.state.set_project(&root_ws.uri);
 
-            let _ = fs::File::create_new(self.state.get_default_doc().to_file_path().unwrap());
+            let _ = std::fs::File::create_new(self.state.get_default_doc().to_file_path().unwrap());
 
             self.state.set_build(&self.state.get_default_doc());
 
@@ -78,7 +77,7 @@ impl LanguageServer for Proxy {
 
     fn did_open(&mut self, params: lsp::DidOpenTextDocumentParams) -> Self::NotifyResult {
         let doc = &params.text_document;
-        if doc.language_id == JS_LANG_ID && !doc.uri.as_str().ends_with(BUILD_FILE) {
+        if doc.language_id == JS_LANG_ID && !doc.uri.as_str().ends_with(BUILD_FILE_EXT) {
             self.state.set_doc(
                 &doc.uri,
                 &[lsp::TextDocumentContentChangeEvent {
@@ -235,7 +234,7 @@ impl LanguageServer for Proxy {
 
                     // TODO: forward build file ?
                     // emit build file with global doc constant to debug anywhere ?
-                    if link.target_uri.as_str().ends_with(BUILD_FILE) {
+                    if link.target_uri.as_str().ends_with(BUILD_FILE_EXT) {
                         continue;
                     }
 
@@ -308,7 +307,7 @@ impl LanguageServer for Proxy {
     ) -> Self::NotifyResult {
         let mut forward_changes = vec![];
         for channge in params.changes {
-            let is_build_file = !channge.uri.as_str().ends_with(BUILD_FILE);
+            let is_build_file = !channge.uri.as_str().ends_with(BUILD_FILE_EXT);
             let is_build_dep = self.state.get_build(&channge.uri).is_some();
 
             if is_build_file || is_build_dep {
