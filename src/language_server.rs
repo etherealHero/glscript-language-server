@@ -1,5 +1,9 @@
+use std::fs::{self, File};
+use std::io::{self, BufRead};
 use std::ops::ControlFlow;
+use std::path::Path;
 use std::sync::Arc;
+
 use tokio::time::{Duration, timeout};
 
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
@@ -32,12 +36,12 @@ impl LanguageServer for Proxy {
             let ws_dir = &root_ws.uri.to_file_path().unwrap();
             let proxy_ws_dir = &mut ws_dir.clone().join(PROXY_WORKSPACE);
 
-            std::fs::create_dir_all(&proxy_ws_dir).unwrap();
-            std::fs::copy(ws_dir.join(JSCONFIG), proxy_ws_dir.join(JSCONFIG)).unwrap();
+            fs::create_dir_all(&proxy_ws_dir).unwrap();
+            fs::copy(ws_dir.join(JSCONFIG), proxy_ws_dir.join(JSCONFIG)).unwrap();
 
             self.state.set_project(&root_ws.uri);
 
-            let _ = std::fs::File::create_new(self.state.get_default_doc().to_file_path().unwrap());
+            let _ = fs::File::create_new(self.state.get_default_doc().to_file_path().unwrap());
 
             self.state.set_build(&self.state.get_default_doc());
 
@@ -395,6 +399,10 @@ impl LanguageServer for Proxy {
     }
 
     fn references(&mut self, mut params: lsp::ReferenceParams) -> ResFut<R::References> {
+        if !params.context.include_declaration {
+            return Box::pin(async move { Ok(None) });
+        }
+
         // the client sends two requests
         // and the second request with false obscures the first response
         let context = lsp::ReferenceContext {
@@ -447,67 +455,156 @@ impl LanguageServer for Proxy {
                     })
             };
 
-            if let Some(def_loc) = definition {
-                let definition_source_path = def_loc.target_uri.as_str();
-                if definition_source_path.ends_with(DECL_FILE_EXT) {
-                    let doc_pos = &mut params.text_document_position;
-                    try_forward_text_document_position_params!(state, req_build, doc_pos);
-                    return fetch(&mut service, params, req_build).await;
-                }
+            if definition.is_none() {
+                let err = "Definition of references request not found".to_string();
+                return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
+            }
 
-                if !definition_source_path.ends_with(JS_FILE_EXT) {
-                    let err = format!(
-                        "Missmatched definition source extension,
+            let def_loc = definition.unwrap();
+            let definition_source_path = def_loc.target_uri.as_str();
+            if definition_source_path.ends_with(DECL_FILE_EXT) {
+                let doc_pos = &mut params.text_document_position;
+                try_forward_text_document_position_params!(state, req_build, doc_pos);
+                return fetch(&mut service, params, req_build).await;
+            }
+
+            if !definition_source_path.ends_with(JS_FILE_EXT) {
+                let err = format!(
+                    "Missmatched definition source extension,
                          expect '{JS_FILE_EXT}' or '{DECL_FILE_EXT}'.
                          References request aborted"
-                    );
-                    let err = err.split_whitespace().collect::<Vec<_>>().join(" ");
-                    return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
-                }
+                );
+                let err = err.split_whitespace().collect::<Vec<_>>().join(" ");
+                return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
+            }
 
-                let mut workspace_locations = HashSet::new();
-                let def_source = state.get_doc(&def_loc.target_uri).unwrap().source;
-                let def_pos = &def_loc.target_selection_range.start;
+            let mut workspace_locations = HashSet::new();
+            let def_doc = state.get_doc(&def_loc.target_uri).unwrap();
+            let builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
+            let def_pos = &def_loc.target_selection_range.start;
+            let def_literal = {
+                let s = def_loc.target_selection_range.start;
+                let start_pos = def_doc.buffer.line_to_char(s.line as usize) + s.character as usize;
+                let e = def_loc.target_selection_range.end;
+                let end_pos = def_doc.buffer.line_to_char(e.line as usize) + e.character as usize;
+                def_doc.buffer.slice(start_pos..end_pos).to_string()
+            };
 
-                // TODO: if global context ?
-                // TODO: find module refs OR index repository THEN did_open module refs
-                let builds_contains_source = state.get_builds_contains_source(&def_source);
-                for doc_of_build_path in builds_contains_source {
-                    let doc_uri = state.path_to_uri(&doc_of_build_path).unwrap();
-                    state.commit_build_changes(&doc_uri, &mut service);
+            let traverse = async |doc_uri: &Uri,
+                                  workspace_locations: &mut HashSet<lsp::Location>,
+                                  service: &mut async_lsp::ServerSocket,
+                                  state: &Arc<crate::state::State>| {
+                let build = state.get_build(doc_uri).unwrap();
+                let position = match build.forward_src_position(def_pos, &def_doc.source) {
+                    Some(pos) => pos,
+                    None => {
+                        let err = format!(
+                            "Sync doc failed (exception by {}). Request aborted",
+                            doc_uri.as_str()
+                        );
+                        tracing::error!(err);
+                        return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err)); // FIXME:
+                    }
+                };
 
-                    let build = state.get_build(&doc_uri).unwrap();
-                    let position = match build.forward_src_position(def_pos, &def_source) {
-                        Some(pos) => pos,
-                        None => {
-                            let err = "Sync docs failed. Request aborted".to_string(); // FIXME:
-                            return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
-                        }
-                    };
+                let forwarded_params = lsp::ReferenceParams {
+                    text_document_position: lsp::TextDocumentPositionParams::new(
+                        lsp::TextDocumentIdentifier::new(build.uri.clone()),
+                        position,
+                    ),
+                    work_done_progress_params: lsp::WorkDoneProgressParams::default(),
+                    partial_result_params: lsp::PartialResultParams::default(),
+                    context,
+                };
 
-                    let forwarded_params = lsp::ReferenceParams {
-                        text_document_position: lsp::TextDocumentPositionParams::new(
-                            lsp::TextDocumentIdentifier::new(build.uri.clone()),
-                            position,
-                        ),
-                        work_done_progress_params: lsp::WorkDoneProgressParams::default(),
-                        partial_result_params: lsp::PartialResultParams::default(),
-                        context,
-                    };
-
-                    let source_references = fetch(&mut service, forwarded_params, build).await;
-                    if let Ok(Some(locations)) = source_references {
-                        for l in locations.iter() {
-                            workspace_locations.insert(l.clone()); // TODO: undistinct links ?
-                        }
+                if let Ok(Some(locations)) = fetch(service, forwarded_params, build).await {
+                    for l in locations.into_iter() {
+                        workspace_locations.insert(l); // TODO: undistinct links ?
                     }
                 }
 
-                Ok(Some(dbg!(workspace_locations).into_iter().collect()))
-            } else {
-                let err = "Definition of references request not found".to_string();
-                Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err))
+                Ok(())
+            };
+
+            tracing::info!("unopened_docs search...");
+            let unopened_docs: Vec<Uri> = {
+                use ignore::Walk;
+                use rayon::prelude::*;
+
+                let default_sources = state.get_build(&state.get_default_doc()).unwrap().sources();
+                let mut unopened_docs = vec![];
+
+                for entry in Walk::new(project).flatten() {
+                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        continue;
+                    }
+
+                    let path = entry.path();
+                    if !file_contains_text(path, &def_literal).is_ok_and(|matched| matched) {
+                        continue;
+                    };
+
+                    let source = Source::from_path(path, project);
+                    if !source
+                        .as_ref()
+                        .is_ok_and(|s| s.ends_with(JS_FILE_EXT) || s.ends_with(DECL_FILE_EXT))
+                    {
+                        continue;
+                    }
+
+                    if builds_contains_source.contains(&path.to_path_buf()) {
+                        continue;
+                    }
+
+                    if source.as_ref().is_ok_and(|s| default_sources.contains(s)) {
+                        continue;
+                    }
+
+                    unopened_docs.push(Uri::from_file_path(path).unwrap());
+                }
+
+                tracing::info!("unopened_docs {} collected", unopened_docs.len());
+                unopened_docs.par_iter().for_each(|doc_uri| {
+                    state.set_build(doc_uri);
+                });
+                tracing::info!("unopened_docs builded");
+                unopened_docs
+            };
+
+            // TODO: strip common dependencies on unopened_docs via module hoisting
+            for (i, doc_uri) in unopened_docs.iter().enumerate() {
+                tracing::info!("traverse {i} unopened doc");
+                let build = state.get_build(doc_uri).unwrap();
+                if service
+                    .did_open(lsp::DidOpenTextDocumentParams {
+                        text_document: lsp::TextDocumentItem::new(
+                            build.uri.clone(),
+                            JS_LANG_ID.into(),
+                            1,
+                            build.content.clone(),
+                        ),
+                    })
+                    .is_err()
+                {
+                    state.remove_build(doc_uri);
+                    continue;
+                };
+
+                let _ = traverse(doc_uri, &mut workspace_locations, &mut service, &state).await;
+                state.remove_build(doc_uri);
+
+                let _ = service.did_close(lsp::DidCloseTextDocumentParams {
+                    text_document: lsp::TextDocumentIdentifier::new(build.uri.clone()),
+                });
             }
+
+            for doc_of_build_path in builds_contains_source {
+                let doc_uri = state.path_to_uri(&doc_of_build_path).unwrap();
+                state.commit_build_changes(&doc_uri, &mut service);
+                traverse(&doc_uri, &mut workspace_locations, &mut service, &state).await?;
+            }
+
+            Ok(Some(workspace_locations.into_iter().collect()))
         })
     }
 }
@@ -626,4 +723,18 @@ fn forward_build_completion_item(item: &mut lsp::CompletionItem) {
     item.text_edit = None; // can't define context
     item.additional_text_edits = None;
     item.command = None;
+}
+
+fn file_contains_text<P: AsRef<Path>>(filename: P, search_term: &str) -> anyhow::Result<bool> {
+    let file = File::open(filename)?;
+    let reader = io::BufReader::new(file);
+
+    for line_result in reader.lines() {
+        let line = line_result?;
+        if line.contains(search_term) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
