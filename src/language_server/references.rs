@@ -253,21 +253,17 @@ pub fn workspace_references(
         };
 
         // TODO:
-        // Receive cancel request. Research on github async-lsp cancel_request feature
+        // Receive cancel request
         //
         // TODO:
-        // windowed open documents (2-4 window size loop)
-        //
-        // TODO:
-        // check if default_included start content slice eq on some builds,
-        // then replace via incremental update instead of full patch req
-        //
-        // TODO:
-        // 1 prioritize
-        //  1.1 BUILDS tree shaking (via module hoisting)
-        //  1.2 DEPENDECY tree shaking (via strip common dependencies by def_literal pattern)
-        //      1.2.1 exclude d.ts definition
-        // 2 ignore refs in default included scripts
+        // 1 DEPENDECY tree shaking (via strip common dependencies by def_literal pattern)
+        //  1.1 disable tree shaking if def_pos in d.ts
+        // impl:
+        //  - save tree shaked build in temporary file (!mirate to temporary file)
+        //  OR - skip emit if EmitCallback not matched def_literal in there recursive call result
+        //     - patch first traverse with pattern matching tree
+        //       ,then add second traverse (united SM & content) with exclude non matching dependencies
+        //  - impl traverse emit fn without separate sourcemaps & content ctx (inspire by single loop)
         for (i, doc_uri) in unopened_docs.iter().enumerate() {
             let build = state.get_build(doc_uri).unwrap();
             let doc_path = state.uri_to_path(doc_uri).unwrap();
@@ -276,8 +272,7 @@ pub fn workspace_references(
 
             send_progress(&mut client, i, unopened_docs.len(), &msg);
 
-            // TODO: make assert: check if build def_decl slice == req def_decl slice
-
+            // TODO: check (build def_literal slice) == (req def_literal)
             if let Err(e) = service.did_open(lsp::DidOpenTextDocumentParams {
                 text_document: lsp::TextDocumentItem::new(
                     build.uri.clone(),
