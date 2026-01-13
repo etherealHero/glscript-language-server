@@ -8,7 +8,7 @@ use tokio::time::{Duration, timeout};
 
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::lsp_types::{notification::Notification, request::Request};
-use async_lsp::{ErrorCode, ResponseError};
+use async_lsp::{ErrorCode, LanguageClient, ResponseError};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::{BUILD_FILE_EXT, Build};
@@ -398,6 +398,7 @@ impl LanguageServer for Proxy {
         })
     }
 
+    #[tracing::instrument(skip_all)]
     fn references(&mut self, mut params: lsp::ReferenceParams) -> ResFut<R::References> {
         if !params.context.include_declaration {
             return Box::pin(async move { Ok(None) });
@@ -422,9 +423,54 @@ impl LanguageServer for Proxy {
         });
 
         let mut service = self.server();
+        let mut client = self.client();
         let state = self.state.clone();
 
         Box::pin(async move {
+            let progress_token = lsp::NumberOrString::String("refs".into());
+            let mut progress_created = false;
+            if client
+                .work_done_progress_create(lsp::WorkDoneProgressCreateParams {
+                    token: progress_token.clone(),
+                })
+                .await
+                .is_ok()
+            {
+                progress_created = true;
+                let _ = client.progress(lsp::ProgressParams {
+                    token: progress_token.clone(),
+                    value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::Begin(
+                        lsp::WorkDoneProgressBegin {
+                            title: "glscript".to_string(),
+                            ..lsp::WorkDoneProgressBegin::default()
+                        },
+                    )),
+                });
+            };
+
+            let send_progress =
+                |client: &mut async_lsp::ClientSocket, idx: usize, size: usize, msg: &str| {
+                    if progress_created {
+                        let percentage = Some((idx as f32 / 100.0 * size as f32) as u32);
+                        let message = match (idx, size) == (0, 0) {
+                            true => msg.to_string(),
+                            false => format!("{idx}/{size} {msg}"),
+                        };
+                        let _ = client.progress(lsp::ProgressParams {
+                            token: progress_token.clone(),
+                            value: lsp::ProgressParamsValue::WorkDone(
+                                lsp::WorkDoneProgress::Report(lsp::WorkDoneProgressReport {
+                                    cancellable: None,
+                                    message: message.into(),
+                                    percentage,
+                                }),
+                            ),
+                        });
+                    }
+                };
+
+            send_progress(&mut client, 0, 0, "tsserver request declaration module...");
+
             let project = state.get_project();
             let response = definition_request.await.map(|r| r.unwrap());
             let definition = match response {
@@ -479,6 +525,7 @@ impl LanguageServer for Proxy {
             }
 
             let mut workspace_locations = HashSet::new();
+            let mut is_sync_doc_failed = false;
             let def_doc = state.get_doc(&def_loc.target_uri).unwrap();
             let builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
             let def_pos = &def_loc.target_selection_range.start;
@@ -490,18 +537,16 @@ impl LanguageServer for Proxy {
                 def_doc.buffer.slice(start_pos..end_pos).to_string()
             };
 
-            let traverse = async |doc_uri: &Uri,
-                                  workspace_locations: &mut HashSet<lsp::Location>,
-                                  service: &mut async_lsp::ServerSocket,
-                                  state: &Arc<crate::state::State>| {
+            let mut traverse = async |doc_uri: &Uri, service: &mut async_lsp::ServerSocket| {
                 let build = state.get_build(doc_uri).unwrap();
                 let position = match build.forward_src_position(def_pos, &def_doc.source) {
                     Some(pos) => pos,
                     None => {
-                        let err = format!(
-                            "Sync doc failed (exception by {}). Request aborted",
-                            doc_uri.as_str()
-                        );
+                        let doc_path = state.uri_to_path(doc_uri).unwrap();
+                        let doc_path = doc_path.strip_prefix(project).unwrap_or(&doc_path);
+                        let err =
+                            format!("Sync doc ({}) failed. Request aborted", doc_path.display());
+                        is_sync_doc_failed = true;
                         tracing::error!(err);
                         return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err)); // FIXME:
                     }
@@ -526,7 +571,6 @@ impl LanguageServer for Proxy {
                 Ok(())
             };
 
-            tracing::info!("unopened_docs search...");
             let unopened_docs: Vec<Uri> = {
                 use ignore::Walk;
                 use rayon::prelude::*;
@@ -534,12 +578,18 @@ impl LanguageServer for Proxy {
                 let default_sources = state.get_build(&state.get_default_doc()).unwrap().sources();
                 let mut unopened_docs = vec![];
 
-                for entry in Walk::new(project).flatten() {
+                send_progress(&mut client, 0, 0, "start scanning repository...");
+                let sources_len = Walk::new(project).count();
+                for (i, entry) in Walk::new(project).flatten().enumerate() {
                     if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                         continue;
                     }
 
                     let path = entry.path();
+                    let msg = format!("scan declaration pattern-matching {}", path.display());
+
+                    send_progress(&mut client, i, sources_len, &msg);
+
                     if !file_contains_text(path, &def_literal).is_ok_and(|matched| matched) {
                         continue;
                     };
@@ -563,18 +613,36 @@ impl LanguageServer for Proxy {
                     unopened_docs.push(Uri::from_file_path(path).unwrap());
                 }
 
-                tracing::info!("unopened_docs {} collected", unopened_docs.len());
                 unopened_docs.par_iter().for_each(|doc_uri| {
                     state.set_build(doc_uri);
                 });
-                tracing::info!("unopened_docs builded");
                 unopened_docs
             };
 
-            // TODO: strip common dependencies on unopened_docs via module hoisting
+            // TODO:
+            // Receive cancel request. Research on github async-lsp cancel_request feature
+            //
+            // TODO:
+            // windowed open documents (2-4 window size loop)
+            //
+            // TODO:
+            // check if default_included start content slice eq on some builds,
+            // then replace via incremental update instead of full patch req
+            //
+            // TODO:
+            // 1 prioritize
+            //  1.1 BUILDS tree shaking (via module hoisting)
+            //  1.2 DEPENDECY tree shaking (via strip common dependencies by def_literal pattern)
+            //      1.2.1 exclude d.ts definition
+            // 2 ignore refs in default included scripts
             for (i, doc_uri) in unopened_docs.iter().enumerate() {
-                tracing::info!("traverse {i} unopened doc");
                 let build = state.get_build(doc_uri).unwrap();
+                let doc_path = state.uri_to_path(doc_uri).unwrap();
+                let doc_path = doc_path.strip_prefix(project).unwrap_or(&doc_path);
+                let msg = format!("tsserver request {}", doc_path.display());
+
+                send_progress(&mut client, i, unopened_docs.len(), &msg);
+
                 if service
                     .did_open(lsp::DidOpenTextDocumentParams {
                         text_document: lsp::TextDocumentItem::new(
@@ -590,7 +658,7 @@ impl LanguageServer for Proxy {
                     continue;
                 };
 
-                let _ = traverse(doc_uri, &mut workspace_locations, &mut service, &state).await;
+                let _ = traverse(doc_uri, &mut service).await;
                 state.remove_build(doc_uri);
 
                 let _ = service.did_close(lsp::DidCloseTextDocumentParams {
@@ -601,7 +669,29 @@ impl LanguageServer for Proxy {
             for doc_of_build_path in builds_contains_source {
                 let doc_uri = state.path_to_uri(&doc_of_build_path).unwrap();
                 state.commit_build_changes(&doc_uri, &mut service);
-                traverse(&doc_uri, &mut workspace_locations, &mut service, &state).await?;
+                traverse(&doc_uri, &mut service).await?;
+            }
+
+            if progress_created {
+                let _ = client.progress(lsp::ProgressParams {
+                    token: progress_token.clone(),
+                    value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::End(
+                        lsp::WorkDoneProgressEnd {
+                            message: format!("received {} references", workspace_locations.len())
+                                .into(),
+                        },
+                    )),
+                });
+            }
+
+            if is_sync_doc_failed {
+                let _ = client.show_message(lsp::ShowMessageParams {
+                    typ: lsp::MessageType::WARNING,
+                    message: "Some script modules failed to sync on build stage.
+                            Response of references may be incomplete.
+                            See output logs for more details."
+                        .into(),
+                });
             }
 
             Ok(Some(workspace_locations.into_iter().collect()))
