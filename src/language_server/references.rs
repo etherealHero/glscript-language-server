@@ -147,7 +147,7 @@ pub fn workspace_references(
         let mut workspace_locations = HashSet::new();
         let mut is_sync_doc_failed = false;
         let def_doc = state.get_doc(&def_loc.target_uri).unwrap();
-        let builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
+        let opened_builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
         let def_pos = &def_loc.target_selection_range.start;
         let def_literal = {
             let s = def_loc.target_selection_range.start;
@@ -228,7 +228,7 @@ pub fn workspace_references(
                     continue;
                 }
 
-                if builds_contains_source.contains(&path.to_path_buf()) {
+                if opened_builds_contains_source.contains(&path.to_path_buf()) {
                     continue;
                 }
 
@@ -242,7 +242,14 @@ pub fn workspace_references(
             unopened_docs.par_iter().for_each(|doc_uri| {
                 state.set_build(doc_uri);
             });
-            unopened_docs
+
+            let all_builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
+
+            all_builds_contains_source
+                .into_iter()
+                .filter(|p| !opened_builds_contains_source.contains(p))
+                .map(|p| state.path_to_uri(&p).unwrap())
+                .collect()
         };
 
         // TODO:
@@ -269,9 +276,7 @@ pub fn workspace_references(
 
             send_progress(&mut client, i, unopened_docs.len(), &msg);
 
-            // build.sources();
-            // FIXME: check if build contains module declaration
-            // FIXME: check if build def_decl slice == req def_decl slice
+            // TODO: make assert: check if build def_decl slice == req def_decl slice
 
             if let Err(e) = service.did_open(lsp::DidOpenTextDocumentParams {
                 text_document: lsp::TextDocumentItem::new(
@@ -294,7 +299,7 @@ pub fn workspace_references(
             });
         }
 
-        for doc_of_build_path in builds_contains_source {
+        for doc_of_build_path in opened_builds_contains_source {
             let doc_uri = state.path_to_uri(&doc_of_build_path).unwrap();
             state.commit_build_changes(&doc_uri, &mut service);
             traverse(&doc_uri, &mut service).await?;

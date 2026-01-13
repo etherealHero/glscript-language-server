@@ -397,7 +397,13 @@ impl LanguageServer for Proxy {
 
     #[tracing::instrument(skip_all)]
     fn references(&mut self, params: lsp::ReferenceParams) -> ResFut<R::References> {
-        workspace_references(self, params)
+        let req = workspace_references(self, params);
+        Box::pin(
+            #[allow(clippy::redundant_async_block)]
+            async move {
+                req.await
+            },
+        )
     }
 }
 
