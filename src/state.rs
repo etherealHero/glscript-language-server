@@ -17,18 +17,24 @@ use crossbeam::atomic::AtomicCell;
 use dashmap::DashMap;
 use ropey::Rope;
 
-type IsDependencyChanged = bool;
+mod progress;
+
+type UnforwardedDocChanges = DashMap<PathBuf, Vec<(lsp::DidChangeTextDocumentParams, bool)>>; // Vec<(_, dependency_changed)>
+type UnforwardedBuildChanges = DashMap<PathBuf, Vec<lsp::DidChangeTextDocumentParams>>;
 
 #[derive(Default, Debug)]
 pub struct State {
+    pub cancel_received: Arc<AtomicCell<bool>>,
+
+    work_done_progress_present: Arc<AtomicCell<bool>>,
+    work_done_progress_token: Arc<OnceLock<lsp::NumberOrString>>,
+
     project_path: Arc<OnceLock<PathBuf>>,
     documents: DashMap<PathBuf, Document>,
     builds: DashMap<PathBuf, BuildWithVersion>,
-    pub cancel_received: Arc<AtomicCell<bool>>,
 
-    unforwarded_doc_changes:
-        DashMap<PathBuf, Vec<(lsp::DidChangeTextDocumentParams, IsDependencyChanged)>>,
-    uncommitted_build_changes: DashMap<PathBuf, Vec<lsp::DidChangeTextDocumentParams>>,
+    unforwarded_doc_changes: UnforwardedDocChanges,
+    uncommitted_build_changes: UnforwardedBuildChanges,
 
     uri_to_path: DashMap<Uri, PathBuf>,
     path_to_uri: DashMap<PathBuf, Uri>,
@@ -294,13 +300,16 @@ impl State {
 
 /// State of config options
 impl State {
-    pub fn set_project(&self, source_uri: &Uri) {
-        let sp = self.uri_to_path(source_uri).unwrap();
-        self.project_path.set(sp).expect("project set once");
+    pub fn initialize_project(&self, source_uri: &Uri) {
+        let path = self.uri_to_path(source_uri).unwrap();
+        let msg = "project initialize once";
+        let ident = lsp::NumberOrString::String("glscript".into());
+        self.project_path.set(path).expect(msg);
+        self.work_done_progress_token.set(ident).expect(msg);
     }
 
     pub fn get_project(&self) -> &PathBuf {
-        self.project_path.get().expect("project installed")
+        self.project_path.get().expect("project initialized")
     }
 
     pub fn get_default_doc(&self) -> Uri {

@@ -9,13 +9,15 @@ use async_lsp::{ErrorCode, LanguageClient, ResponseError};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::Build;
-use crate::language_server::{DefRes, forward_build_range};
+use crate::language_server::{DefRes, definition_params, forward_build_range};
 use crate::types::Source;
 
-use crate::proxy::{Canonicalize, DECL_FILE_EXT, JS_FILE_EXT, JS_LANG_ID};
+use crate::proxy::{Canonicalize, DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
 use crate::proxy::{Proxy, ResFut};
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
+// FIXME: proxy d.ts symbols
+// FIXME: build unforwarded locations
 pub fn workspace_references(
     this: &mut Proxy,
     mut params: lsp::ReferenceParams,
@@ -24,81 +26,34 @@ pub fn workspace_references(
         return Box::pin(async move { Ok(None) });
     }
 
-    // the client sends two requests
-    // and the second request with false obscures the first response
-    let context = lsp::ReferenceContext {
-        include_declaration: true,
-    };
-
     let uri = &params.text_document_position.text_document.uri;
     let pos = &params.text_document_position.position;
     let req_build = try_ensure_build!(this, uri, params, references);
-    let definition_request = this.definition(lsp::GotoDefinitionParams {
-        text_document_position_params: lsp::TextDocumentPositionParams::new(
-            lsp::TextDocumentIdentifier::new(uri.clone()),
-            pos.to_owned(),
-        ),
-        work_done_progress_params: lsp::WorkDoneProgressParams::default(),
-        partial_result_params: lsp::PartialResultParams::default(),
-    });
+    let definition_request = this.definition(definition_params(uri.clone(), pos.to_owned()));
 
     let mut service = this.server();
     let mut client = this.client();
     let state = this.state.clone();
 
     Box::pin(async move {
-        let progress_token = lsp::NumberOrString::String("refs".into());
-        let mut progress_created = false;
-        if client
-            .work_done_progress_create(lsp::WorkDoneProgressCreateParams {
-                token: progress_token.clone(),
-            })
-            .await
-            .is_ok()
-        {
-            progress_created = true;
-            let _ = client.progress(lsp::ProgressParams {
-                token: progress_token.clone(),
-                value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::Begin(
-                    lsp::WorkDoneProgressBegin {
-                        title: "glscript".to_string(),
-                        ..lsp::WorkDoneProgressBegin::default()
-                    },
-                )),
-            });
-        };
-
-        let send_progress =
-            |client: &mut async_lsp::ClientSocket, idx: usize, size: usize, msg: &str| {
-                if progress_created {
-                    let percentage = Some((idx as f32 / 100.0 * size as f32) as u32);
-                    let message = match (idx, size) == (0, 0) {
-                        true => msg.to_string(),
-                        false => format!("{idx}/{size} {msg}"),
-                    };
-                    let _ = client.progress(lsp::ProgressParams {
-                        token: progress_token.clone(),
-                        value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::Report(
-                            lsp::WorkDoneProgressReport {
-                                cancellable: None,
-                                message: message.into(),
-                                percentage,
-                            },
-                        )),
-                    });
-                }
-            };
-
-        send_progress(&mut client, 0, 0, "tsserver request declaration module...");
+        state.send_progress(&mut client, (0, 0), "tsserver request declaration");
 
         let project = state.get_project();
-        let response = definition_request.await.map(|r| r.unwrap());
-        let definition = match response {
-            Ok(ref definition_response) => match definition_response {
-                DefRes::Link(links) => links.first(),
-                _ => unreachable!(),
-            },
-            Err(err) => return Err(err),
+        let definition_response = definition_request.await;
+        let def_loc = {
+            let message = "Definition of references request not found";
+            let not_found = || Err(ResponseError::new(ErrorCode::REQUEST_FAILED, message));
+            match definition_response {
+                Ok(Some(ref definition)) => match definition {
+                    DefRes::Link(links) => match links.first() {
+                        Some(def_loc) => def_loc,
+                        None => return not_found(),
+                    },
+                    _ => unreachable!(),
+                },
+                Ok(None) => return not_found(),
+                Err(err) => return Err(err),
+            }
         };
 
         let fetch = async |service: &mut async_lsp::ServerSocket,
@@ -121,12 +76,6 @@ pub fn workspace_references(
                 })
         };
 
-        if definition.is_none() {
-            let err = "Definition of references request not found".to_string();
-            return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
-        }
-
-        let def_loc = definition.unwrap();
         let definition_source_path = def_loc.target_uri.as_str();
         if definition_source_path.ends_with(DECL_FILE_EXT) {
             let doc_pos = &mut params.text_document_position;
@@ -137,8 +86,8 @@ pub fn workspace_references(
         if !definition_source_path.ends_with(JS_FILE_EXT) {
             let err = format!(
                 "Missmatched definition source extension,
-                         expect '{JS_FILE_EXT}' or '{DECL_FILE_EXT}'.
-                         References request aborted"
+                expect '{JS_FILE_EXT}' or '{DECL_FILE_EXT}'.
+                References request aborted"
             );
             let err = err.split_whitespace().collect::<Vec<_>>().join(" ");
             return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
@@ -178,11 +127,13 @@ pub fn workspace_references(
                 ),
                 work_done_progress_params: lsp::WorkDoneProgressParams::default(),
                 partial_result_params: lsp::PartialResultParams::default(),
-                context,
+                context: lsp::ReferenceContext {
+                    include_declaration: true, // the client sends two requests and the second request with false obscures the first response
+                },
             };
 
             let fetch_response = timeout(
-                Duration::from_millis(5000),
+                Duration::from_millis(DEFAULT_TIMEOUT_MS),
                 fetch(service, forwarded_params, build),
             )
             .await
@@ -201,10 +152,8 @@ pub fn workspace_references(
             use ignore::Walk;
             use rayon::prelude::*;
 
+            let mut matched_docs = vec![];
             let default_sources = state.get_build(&state.get_default_doc()).unwrap().sources();
-            let mut unopened_docs = vec![];
-
-            send_progress(&mut client, 0, 0, "start scanning repository...");
             let sources_len = Walk::new(project).count();
             for (i, entry) in Walk::new(project).flatten().enumerate() {
                 if !entry.file_type().is_some_and(|ft| ft.is_file()) {
@@ -212,9 +161,11 @@ pub fn workspace_references(
                 }
 
                 let path = entry.path();
-                let msg = format!("scan declaration pattern-matching {}", path.display());
 
-                send_progress(&mut client, i, sources_len, &msg);
+                if i % 10 == 0 {
+                    let msg = format!("scan {}", path.display());
+                    state.send_progress(&mut client, (i, sources_len), &msg);
+                }
 
                 if !file_contains_text(path, &def_literal).is_ok_and(|matched| matched) {
                     continue;
@@ -236,17 +187,24 @@ pub fn workspace_references(
                     continue;
                 }
 
-                unopened_docs.push(Uri::from_file_path(path).unwrap());
+                matched_docs.push(Uri::from_file_path(path).unwrap());
             }
 
-            unopened_docs.par_iter().for_each(|doc_uri| {
+            state.send_progress(&mut client, (0, 0), "build project...");
+            matched_docs.par_iter().for_each(|doc_uri| {
                 state.set_build(doc_uri);
             });
 
             let all_builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
 
+            matched_docs.par_iter().for_each(|d| {
+                if !all_builds_contains_source.contains(&state.uri_to_path(d).unwrap()) {
+                    state.remove_build(d);
+                }
+            });
+
             all_builds_contains_source
-                .into_iter()
+                .into_par_iter()
                 .filter(|p| !opened_builds_contains_source.contains(p))
                 .map(|p| state.path_to_uri(&p).unwrap())
                 .collect()
@@ -290,7 +248,7 @@ pub fn workspace_references(
                 text_document: lsp::TextDocumentIdentifier::new(build.uri.clone()),
             });
 
-            send_progress(&mut client, i, unopened_docs.len(), &msg);
+            state.send_progress(&mut client, (i, unopened_docs.len()), &msg);
             state.remove_build(doc_uri);
         }
 
@@ -301,18 +259,6 @@ pub fn workspace_references(
             let doc_uri = state.path_to_uri(&doc_of_build_path).unwrap();
             state.commit_build_changes(&doc_uri, &mut service);
             traverse(&doc_uri, &mut service).await?;
-        }
-
-        if progress_created {
-            let _ = client.progress(lsp::ProgressParams {
-                token: progress_token.clone(),
-                value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::End(
-                    lsp::WorkDoneProgressEnd {
-                        message: format!("received {} references", workspace_locations.len())
-                            .into(),
-                    },
-                )),
-            });
         }
 
         if state.cancel_received.load() {

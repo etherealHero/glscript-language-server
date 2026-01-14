@@ -15,6 +15,7 @@ pub const JS_LANG_ID: &str = "javascript";
 pub const JS_FILE_EXT: &str = ".js";
 pub const DECL_FILE_EXT: &str = ".d.ts";
 pub const PROXY_WORKSPACE: &str = "./.local/gls-proxy-workspace";
+pub const DEFAULT_TIMEOUT_MS: u64 = 5000;
 
 pub type ResFut<R> = BoxFuture<'static, Result<<R as Request>::Result, ResponseError>>;
 pub type ResReq<R> = Result<<R as Request>::Result, async_lsp::Error>;

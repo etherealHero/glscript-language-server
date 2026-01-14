@@ -36,7 +36,7 @@ impl LanguageServer for Proxy {
             std::fs::create_dir_all(&proxy_ws_dir).unwrap();
             std::fs::copy(ws_dir.join(JSCONFIG), proxy_ws_dir.join(JSCONFIG)).unwrap();
 
-            self.state.set_project(&root_ws.uri);
+            self.state.initialize_project(&root_ws.uri);
 
             let _ = std::fs::File::create_new(self.state.get_default_doc().to_file_path().unwrap());
 
@@ -161,14 +161,7 @@ impl LanguageServer for Proxy {
         let build = try_ensure_build!(self, uri, params, hover);
 
         // TODO: send cancel req on timeout
-        let decl_req = self.definition(lsp::GotoDefinitionParams {
-            text_document_position_params: lsp::TextDocumentPositionParams::new(
-                lsp::TextDocumentIdentifier::new(uri.clone()),
-                pos.to_owned(),
-            ),
-            work_done_progress_params: lsp::WorkDoneProgressParams::default(),
-            partial_result_params: lsp::PartialResultParams::default(),
-        });
+        let decl_req = self.definition(definition_params(uri.clone(), pos.to_owned()));
         let state = self.state.clone();
         let req_source = state.get_doc(uri).unwrap().source.clone();
 
@@ -206,6 +199,7 @@ impl LanguageServer for Proxy {
         })
     }
 
+    #[tracing::instrument(skip_all)]
     fn definition(&mut self, mut params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
         let mut service = self.server();
         let uri = &params.text_document_position_params.text_document.uri;
@@ -405,12 +399,13 @@ impl LanguageServer for Proxy {
     fn references(&mut self, params: lsp::ReferenceParams) -> ResFut<R::References> {
         self.state.cancel_received.store(false);
         let req = workspace_references(self, params);
-        Box::pin(
-            #[allow(clippy::redundant_async_block)]
-            async move {
-                req.await
-            },
-        )
+        let (state, mut client) = (self.state.clone(), self.client());
+        Box::pin(async move {
+            state.create_progress(&mut client).await;
+            let res = req.await;
+            state.destroy_progress(&mut client);
+            res
+        })
     }
 }
 
@@ -497,4 +492,15 @@ fn forward_build_completion_item(item: &mut lsp::CompletionItem) {
     item.text_edit = None; // can't define context
     item.additional_text_edits = None;
     item.command = None;
+}
+
+pub fn definition_params(uri: Uri, pos: lsp::Position) -> lsp::GotoDefinitionParams {
+    lsp::GotoDefinitionParams {
+        text_document_position_params: lsp::TextDocumentPositionParams::new(
+            lsp::TextDocumentIdentifier::new(uri),
+            pos,
+        ),
+        work_done_progress_params: lsp::WorkDoneProgressParams::default(),
+        partial_result_params: lsp::PartialResultParams::default(),
+    }
 }
