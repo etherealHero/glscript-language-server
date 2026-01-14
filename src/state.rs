@@ -13,6 +13,7 @@ use crate::types::{
 
 use async_lsp::lsp_types::Url as Uri;
 use async_lsp::{LanguageServer, ServerSocket, lsp_types as lsp};
+use crossbeam::atomic::AtomicCell;
 use dashmap::DashMap;
 use ropey::Rope;
 
@@ -23,6 +24,7 @@ pub struct State {
     project_path: Arc<OnceLock<PathBuf>>,
     documents: DashMap<PathBuf, Document>,
     builds: DashMap<PathBuf, BuildWithVersion>,
+    pub cancel_received: Arc<AtomicCell<bool>>,
 
     unforwarded_doc_changes:
         DashMap<PathBuf, Vec<(lsp::DidChangeTextDocumentParams, IsDependencyChanged)>>,

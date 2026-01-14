@@ -395,8 +395,15 @@ impl LanguageServer for Proxy {
         })
     }
 
+    fn cancel_request(&mut self, params: lsp::CancelParams) -> Self::NotifyResult {
+        tracing::info!("receive cancel_request {:?}", params.id);
+        self.state.cancel_received.store(true);
+        ControlFlow::Continue(())
+    }
+
     #[tracing::instrument(skip_all)]
     fn references(&mut self, params: lsp::ReferenceParams) -> ResFut<R::References> {
+        self.state.cancel_received.store(false);
         let req = workspace_references(self, params);
         Box::pin(
             #[allow(clippy::redundant_async_block)]

@@ -252,8 +252,7 @@ pub fn workspace_references(
                 .collect()
         };
 
-        // TODO:
-        // Receive cancel request
+        // TODO: check (build def_literal slice) == (req def_literal)
         //
         // TODO:
         // 1 DEPENDECY tree shaking (via strip common dependencies by def_literal pattern)
@@ -265,36 +264,40 @@ pub fn workspace_references(
         //       ,then add second traverse (united SM & content) with exclude non matching dependencies
         //  - impl traverse emit fn without separate sourcemaps & content ctx (inspire by single loop)
         for (i, doc_uri) in unopened_docs.iter().enumerate() {
-            let build = state.get_build(doc_uri).unwrap();
-            let doc_path = state.uri_to_path(doc_uri).unwrap();
-            let doc_path = doc_path.strip_prefix(project).unwrap_or(&doc_path);
-            let msg = format!("tsserver request {}", doc_path.display());
+            let try_open = |service: &mut async_lsp::ServerSocket| {
+                let build = state.get_build(doc_uri).unwrap();
+                service.did_open(lsp::DidOpenTextDocumentParams {
+                    text_document: lsp::TextDocumentItem::new(
+                        build.uri.clone(),
+                        JS_LANG_ID.into(),
+                        1,
+                        build.content.clone(),
+                    ),
+                })
+            };
 
-            send_progress(&mut client, i, unopened_docs.len(), &msg);
-
-            // TODO: check (build def_literal slice) == (req def_literal)
-            if let Err(e) = service.did_open(lsp::DidOpenTextDocumentParams {
-                text_document: lsp::TextDocumentItem::new(
-                    build.uri.clone(),
-                    JS_LANG_ID.into(),
-                    1,
-                    build.content.clone(),
-                ),
-            }) {
-                tracing::warn!("tsserver did_open ({}) error: {e}", doc_path.display());
+            if state.cancel_received.load() || try_open(&mut service).is_err() {
                 state.remove_build(doc_uri);
                 continue;
             }
 
+            let doc_path = state.uri_to_path(doc_uri).unwrap();
+            let doc_path = doc_path.strip_prefix(project).unwrap_or(&doc_path);
+            let msg = format!("tsserver request {}", doc_path.display());
+            let build = state.get_build(doc_uri).unwrap();
             let _ = traverse(doc_uri, &mut service).await;
-            state.remove_build(doc_uri);
-
             let _ = service.did_close(lsp::DidCloseTextDocumentParams {
                 text_document: lsp::TextDocumentIdentifier::new(build.uri.clone()),
             });
+
+            send_progress(&mut client, i, unopened_docs.len(), &msg);
+            state.remove_build(doc_uri);
         }
 
         for doc_of_build_path in opened_builds_contains_source {
+            if state.cancel_received.load() {
+                break;
+            }
             let doc_uri = state.path_to_uri(&doc_of_build_path).unwrap();
             state.commit_build_changes(&doc_uri, &mut service);
             traverse(&doc_uri, &mut service).await?;
@@ -310,6 +313,10 @@ pub fn workspace_references(
                     },
                 )),
             });
+        }
+
+        if state.cancel_received.load() {
+            return Ok(None);
         }
 
         if is_sync_doc_failed {

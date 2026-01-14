@@ -37,6 +37,7 @@ base64 = "0.22.1"
 anyhow = "1.0.100"
 dashmap = { version = "6.1.0", features = ["rayon"] }
 rayon = "1.11.0"
+crossbeam = "0.8"
 regex = "1.12.2"
 dunce = "1.0.5"
 ignore = "0.4"
