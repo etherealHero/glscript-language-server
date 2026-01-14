@@ -1,8 +1,6 @@
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
-use async_lsp::lsp_types as lsp;
-use async_lsp::lsp_types::Url as Uri;
+use async_lsp::lsp_types::{self as lsp, Url as Uri};
 use derive_more::Constructor;
 use sourcemap::SourceMap;
 

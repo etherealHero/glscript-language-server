@@ -1,12 +1,10 @@
+use derive_more::Constructor;
 use futures::future::BoxFuture;
-use std::sync::{Arc, OnceLock};
 use tower::ServiceBuilder;
 
-use async_lsp::lsp_types::Url as Uri;
-use async_lsp::lsp_types::request::Request;
+use async_lsp::lsp_types::{Url as Uri, request::Request};
 use async_lsp::router::Router;
 use async_lsp::{ClientSocket, ResponseError, ServerSocket};
-use derive_more::Constructor;
 
 use crate::forward::{ForwardingLayer, TService};
 use crate::state::State;
@@ -18,7 +16,6 @@ pub const PROXY_WORKSPACE: &str = "./.local/gls-proxy-workspace";
 pub const DEFAULT_TIMEOUT_MS: u64 = 5000;
 
 pub type ResFut<R> = BoxFuture<'static, Result<<R as Request>::Result, ResponseError>>;
-pub type ResReq<R> = Result<<R as Request>::Result, async_lsp::Error>;
 pub type ResReqProxy<R> = Result<<R as Request>::Result, ResponseError>;
 
 pub trait Canonicalize {
@@ -33,9 +30,9 @@ impl Canonicalize for Uri {
 
 #[derive(Default, Clone, Constructor)]
 pub struct Proxy {
-    client: Arc<OnceLock<ClientSocket>>,
-    server: Arc<OnceLock<ServerSocket>>,
-    pub state: Arc<State>,
+    client: std::sync::Arc<std::sync::OnceLock<ClientSocket>>,
+    server: std::sync::Arc<std::sync::OnceLock<ServerSocket>>,
+    pub state: std::sync::Arc<State>,
 }
 
 impl Proxy {
@@ -48,33 +45,14 @@ impl Proxy {
     }
 
     pub fn init(
-        server: Arc<OnceLock<ServerSocket>>,
-        client: Arc<OnceLock<ClientSocket>>,
+        server: std::sync::Arc<std::sync::OnceLock<ServerSocket>>,
+        client: std::sync::Arc<std::sync::OnceLock<ClientSocket>>,
     ) -> (impl TService<Future: Send>, impl TService<Future: Send>) {
-        let proxy = Self::new(client, server, Arc::new(State::default()));
+        let proxy = Self::new(client, server, std::sync::Arc::new(State::default()));
         let sr = Router::from_language_server(proxy.clone());
         let cr = Router::from_language_client(proxy);
-        let server;
-        let client;
-
-        #[cfg(debug_assertions)]
-        {
-            server = ServiceBuilder::new()
-                .layer(ForwardingLayer)
-                // .layer(async_lsp::tracing::TracingLayer::default())
-                .service(sr);
-            client = ServiceBuilder::new()
-                .layer(ForwardingLayer)
-                // .layer(async_lsp::tracing::TracingLayer::default())
-                .service(cr);
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            server = ServiceBuilder::new().layer(ForwardingLayer).service(sr);
-            client = ServiceBuilder::new().layer(ForwardingLayer).service(cr);
-        }
-
+        let server = ServiceBuilder::new().layer(ForwardingLayer).service(sr);
+        let client = ServiceBuilder::new().layer(ForwardingLayer).service(cr);
         (server, client)
     }
 }
@@ -93,8 +71,8 @@ macro_rules! try_ensure_build {
         } else {
             let mut service = $self.server();
             return Box::pin(async move {
-                let res = service.$method($params).await;
-                res.map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+                use $crate::language_server::Error;
+                service.$method($params).await.map_err(Error::internal)
             });
         }
     }};
@@ -115,8 +93,9 @@ macro_rules! try_forward_text_document_position_params {
             *pos = build_pos;
             *uri = $build.uri.clone();
         } else {
+            use $crate::language_server::Error;
             let err = format!("Forward src position `{pos:?}` failed");
-            return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
+            return Err(Error::request_failed(err));
         };
     }};
 }

@@ -1,21 +1,18 @@
-use std::fs;
 use std::mem::transmute;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use async_lsp::lsp_types::Url as Uri;
+use async_lsp::{LanguageServer, ServerSocket, lsp_types as lsp};
+use dashmap::DashMap;
+use ropey::Rope;
+
 use crate::builder::Build;
 use crate::parser::{Token, parse};
 use crate::proxy::{Canonicalize, PROXY_WORKSPACE};
-use crate::types::{
-    BuildWithVersion, Document, DocumentDeclarationStatement, DocumentIdentifier,
-    DocumentLinkStatement, Source, SourceHash,
-};
 
-use async_lsp::lsp_types::Url as Uri;
-use async_lsp::{LanguageServer, ServerSocket, lsp_types as lsp};
-use crossbeam::atomic::AtomicCell;
-use dashmap::DashMap;
-use ropey::Rope;
+use crate::types::{BuildWithVersion, DocumentIdentifier, Source, SourceHash};
+use crate::types::{Document, DocumentDeclarationStatement, DocumentLinkStatement};
 
 mod progress;
 
@@ -24,9 +21,9 @@ type UnforwardedBuildChanges = DashMap<PathBuf, Vec<lsp::DidChangeTextDocumentPa
 
 #[derive(Default, Debug)]
 pub struct State {
-    pub cancel_received: Arc<AtomicCell<bool>>,
+    pub cancel_received: Arc<crossbeam::atomic::AtomicCell<bool>>,
 
-    work_done_progress_present: Arc<AtomicCell<bool>>,
+    work_done_progress_present: Arc<crossbeam::atomic::AtomicCell<bool>>,
     work_done_progress_token: Arc<OnceLock<lsp::NumberOrString>>,
 
     project_path: Arc<OnceLock<PathBuf>>,
@@ -82,7 +79,7 @@ impl State {
         let patch_doc_content = |doc: &mut RefMut<'_>, content: &str| {
             let content = Arc::new(content.to_string());
             let content_ref = content.clone();
-            let tokens = parse(&content_ref, self);
+            let tokens = parse(&content_ref);
             let tokens = unsafe { transmute::<Vec<Token<'_>>, Vec<Token<'static>>>(tokens) };
 
             doc.dependency_hash = Into::into(&tokens);
@@ -124,7 +121,7 @@ impl State {
         }
 
         let content = &[lsp::TextDocumentContentChangeEvent {
-            text: fs::read_to_string(path).unwrap(),
+            text: std::fs::read_to_string(path).unwrap(),
             range_length: None,
             range: None,
         }];
@@ -298,7 +295,7 @@ impl State {
     }
 }
 
-/// State of config options
+/// State of configuration
 impl State {
     pub fn initialize_project(&self, source_uri: &Uri) {
         let path = self.uri_to_path(source_uri).unwrap();

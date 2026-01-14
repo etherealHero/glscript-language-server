@@ -1,6 +1,4 @@
-use async_lsp::ClientSocket;
-use async_lsp::LanguageClient;
-use async_lsp::lsp_types as lsp;
+use async_lsp::{ClientSocket, LanguageClient, lsp_types as lsp};
 
 use crate::state::State;
 

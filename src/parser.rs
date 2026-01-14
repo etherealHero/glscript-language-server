@@ -6,7 +6,6 @@ mod grammar {
     pub struct GlScriptSubsetGrammar;
 }
 
-use crate::state::State;
 use derive_more::{Constructor, From};
 use grammar::{GlScriptSubsetGrammar, Ident, Rule};
 
@@ -66,7 +65,7 @@ fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> Pairs<'_> {
         .into_inner()
 }
 
-fn get_pairs<'a>(raw_text: &'a str, _state: &State) -> Pairs<'a> {
+fn get_pairs<'a>(raw_text: &'a str) -> Pairs<'a> {
     let pairs = parse_raw_text(Rule::SourceFileFast, raw_text);
     let (mut pos, mut ok) = (0, true);
 
@@ -84,24 +83,12 @@ fn get_pairs<'a>(raw_text: &'a str, _state: &State) -> Pairs<'a> {
 
     match ok && pos == raw_text.len() {
         true => pairs,
-        false => {
-            #[cfg(debug_assertions)]
-            {
-                let mut emit_text = String::with_capacity(raw_text.len());
-                let walk = |n: Pair<'_>| emit_text.push_str(n.as_span().as_str());
-                pairs.clone().for_each(walk);
-
-                std::fs::write(_state.get_project().join("emit_text.txt"), emit_text).unwrap();
-                std::fs::write(_state.get_project().join("raw_text.txt"), raw_text).unwrap();
-            }
-
-            parse_raw_text(Rule::SourceFile, raw_text) // fallback
-        }
+        false => parse_raw_text(Rule::SourceFile, raw_text), // fallback
     }
 }
 
-pub fn parse<'a>(raw_text: &'a str, _state: &State) -> Vec<Token<'a>> {
-    let pairs = get_pairs(raw_text, _state);
+pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
+    let pairs = get_pairs(raw_text);
     let mut out = Vec::with_capacity(raw_text.lines().count());
     let (mut line, mut offset, mut pos, mut pending) = (0, 0, 0usize, None::<Pending>);
     let flush_pending_token = |p: Pending| {

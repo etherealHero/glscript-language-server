@@ -1,24 +1,17 @@
-use std::collections::HashSet;
-use std::path::Path;
-use std::sync::Arc;
-
+use async_lsp::lsp_types::{Url as Uri, request as R};
+use async_lsp::{LanguageClient, LanguageServer, lsp_types as lsp};
 use tokio::time::{Duration, timeout};
 
-use async_lsp::lsp_types::{Url as Uri, request as R};
-use async_lsp::{ErrorCode, LanguageClient, ResponseError};
-use async_lsp::{LanguageServer, lsp_types as lsp};
-
 use crate::builder::Build;
-use crate::language_server::{DefRes, definition_params, forward_build_range};
+use crate::language_server::{DefRes, Error, definition_params, forward_build_range};
+use crate::proxy::{Canonicalize, Proxy, ResFut};
+use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
 use crate::types::Source;
-
-use crate::proxy::{Canonicalize, DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
-use crate::proxy::{Proxy, ResFut};
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
 // FIXME: proxy d.ts symbols
 // FIXME: build unforwarded locations
-pub fn workspace_references(
+pub fn proxy_workspace_references(
     this: &mut Proxy,
     mut params: lsp::ReferenceParams,
 ) -> ResFut<R::References> {
@@ -34,35 +27,32 @@ pub fn workspace_references(
     let mut service = this.server();
     let mut client = this.client();
     let state = this.state.clone();
+    let project = state.get_project().clone();
 
     Box::pin(async move {
-        state.send_progress(&mut client, (0, 0), "tsserver request declaration");
-
-        let project = state.get_project();
         let definition_response = definition_request.await;
         let def_loc = {
             let message = "Definition of references request not found";
-            let not_found = || Err(ResponseError::new(ErrorCode::REQUEST_FAILED, message));
             match definition_response {
                 Ok(Some(ref definition)) => match definition {
                     DefRes::Link(links) => match links.first() {
                         Some(def_loc) => def_loc,
-                        None => return not_found(),
+                        None => return Err(Error::request_failed(message)),
                     },
                     _ => unreachable!(),
                 },
-                Ok(None) => return not_found(),
+                Ok(None) => return Err(Error::request_failed(message)),
                 Err(err) => return Err(err),
             }
         };
 
         let fetch = async |service: &mut async_lsp::ServerSocket,
                            build_params: lsp::ReferenceParams,
-                           build: Arc<Build>| {
+                           build: std::sync::Arc<Build>| {
             service
                 .references(build_params)
                 .await
-                .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, e))
+                .map_err(Error::internal)
                 .map(|r| r.unwrap())
                 .map(|mut r| {
                     r.iter_mut().for_each(|l| {
@@ -90,10 +80,10 @@ pub fn workspace_references(
                 References request aborted"
             );
             let err = err.split_whitespace().collect::<Vec<_>>().join(" ");
-            return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err));
+            return Err(Error::request_failed(err));
         }
 
-        let mut workspace_locations = HashSet::new();
+        let mut workspace_locations = std::collections::HashSet::new();
         let mut is_sync_doc_failed = false;
         let def_doc = state.get_doc(&def_loc.target_uri).unwrap();
         let opened_builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
@@ -112,11 +102,11 @@ pub fn workspace_references(
                 Some(pos) => pos,
                 None => {
                     let doc_path = state.uri_to_path(doc_uri).unwrap();
-                    let doc_path = doc_path.strip_prefix(project).unwrap_or(&doc_path);
+                    let doc_path = doc_path.strip_prefix(&project).unwrap_or(&doc_path);
                     let err = format!("Sync doc ({}) failed. Request aborted", doc_path.display());
                     is_sync_doc_failed = true;
                     tracing::error!(err);
-                    return Err(ResponseError::new(ErrorCode::REQUEST_FAILED, err)); // FIXME:
+                    return Err(Error::request_failed(err)); // FIXME:
                 }
             };
 
@@ -154,8 +144,8 @@ pub fn workspace_references(
 
             let mut matched_docs = vec![];
             let default_sources = state.get_build(&state.get_default_doc()).unwrap().sources();
-            let sources_len = Walk::new(project).count();
-            for (i, entry) in Walk::new(project).flatten().enumerate() {
+            let sources_len = Walk::new(&project).count();
+            for (i, entry) in Walk::new(&project).flatten().enumerate() {
                 if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                     continue;
                 }
@@ -171,7 +161,7 @@ pub fn workspace_references(
                     continue;
                 };
 
-                let source = Source::from_path(path, project);
+                let source = Source::from_path(path, &project);
                 if !source
                     .as_ref()
                     .is_ok_and(|s| s.ends_with(JS_FILE_EXT) || s.ends_with(DECL_FILE_EXT))
@@ -240,7 +230,7 @@ pub fn workspace_references(
             }
 
             let doc_path = state.uri_to_path(doc_uri).unwrap();
-            let doc_path = doc_path.strip_prefix(project).unwrap_or(&doc_path);
+            let doc_path = doc_path.strip_prefix(&project).unwrap_or(&doc_path);
             let msg = format!("tsserver request {}", doc_path.display());
             let build = state.get_build(doc_uri).unwrap();
             let _ = traverse(doc_uri, &mut service).await;
@@ -279,7 +269,10 @@ pub fn workspace_references(
     })
 }
 
-fn file_contains_text<P: AsRef<Path>>(filename: P, search_term: &str) -> anyhow::Result<bool> {
+fn file_contains_text<P: AsRef<std::path::Path>>(
+    filename: P,
+    search_term: &str,
+) -> anyhow::Result<bool> {
     use std::io::BufRead;
 
     let file = std::fs::File::open(filename)?;
