@@ -1,11 +1,12 @@
 use async_lsp::lsp_types::{Url as Uri, request as R};
-use async_lsp::{LanguageClient, LanguageServer, lsp_types as lsp};
+use async_lsp::{LanguageClient, LanguageServer, ResponseError, lsp_types as lsp};
 use tokio::time::{Duration, timeout};
 
 use crate::builder::Build;
 use crate::language_server::{DefRes, Error, definition_params, forward_build_range};
 use crate::proxy::{Canonicalize, Proxy, ResFut};
 use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
+use crate::state::State;
 use crate::types::Source;
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
@@ -22,7 +23,9 @@ pub fn proxy_workspace_references(
     let uri = &params.text_document_position.text_document.uri;
     let pos = &params.text_document_position.position;
     let req_build = try_ensure_build!(this, uri, params, references);
+    tracing::warn!("try_ensure_build!");
     let definition_request = this.definition(definition_params(uri.clone(), pos.to_owned()));
+    tracing::warn!("definition_request");
 
     let mut service = this.server();
     let mut client = this.client();
@@ -31,6 +34,7 @@ pub fn proxy_workspace_references(
 
     Box::pin(async move {
         let definition_response = definition_request.await;
+        tracing::warn!("definition_response");
         let def_loc = {
             let message = "Definition of references request not found";
             match definition_response {
@@ -45,32 +49,20 @@ pub fn proxy_workspace_references(
                 Err(err) => return Err(err),
             }
         };
-
-        let fetch = async |service: &mut async_lsp::ServerSocket,
-                           build_params: lsp::ReferenceParams,
-                           build: std::sync::Arc<Build>| {
-            service
-                .references(build_params)
-                .await
-                .map_err(Error::internal)
-                .map(|r| r.unwrap())
-                .map(|mut r| {
-                    r.iter_mut().for_each(|l| {
-                        if build.uri.canonicalize() == l.uri.canonicalize()
-                            && let Ok(source) = forward_build_range(&mut l.range, &build)
-                        {
-                            l.uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
-                        }
-                    });
-                    Some(r)
-                })
-        };
+        tracing::warn!("def_loc");
 
         let definition_source_path = def_loc.target_uri.as_str();
         if definition_source_path.ends_with(DECL_FILE_EXT) {
             let doc_pos = &mut params.text_document_position;
             try_forward_text_document_position_params!(state, req_build, doc_pos);
-            return fetch(&mut service, params, req_build).await;
+            return fetch_references_for_client_from_build_params(
+                &mut service,
+                &state,
+                &project,
+                params,
+                req_build,
+            )
+            .await;
         }
 
         if !definition_source_path.ends_with(JS_FILE_EXT) {
@@ -86,7 +78,9 @@ pub fn proxy_workspace_references(
         let mut workspace_locations = std::collections::HashSet::new();
         let mut is_sync_doc_failed = false;
         let def_doc = state.get_doc(&def_loc.target_uri).unwrap();
+        tracing::warn!("def_doc");
         let opened_builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
+        tracing::warn!("opened_builds_contains_source");
         let def_pos = &def_loc.target_selection_range.start;
         let def_literal = {
             let s = def_loc.target_selection_range.start;
@@ -95,6 +89,7 @@ pub fn proxy_workspace_references(
             let end_pos = def_doc.buffer.line_to_char(e.line as usize) + e.character as usize;
             def_doc.buffer.slice(start_pos..end_pos).to_string()
         };
+        tracing::warn!("def_literal");
 
         let mut traverse = async |doc_uri: &Uri, service: &mut async_lsp::ServerSocket| {
             let build = state.get_build(doc_uri).unwrap();
@@ -124,7 +119,13 @@ pub fn proxy_workspace_references(
 
             let fetch_response = timeout(
                 Duration::from_millis(DEFAULT_TIMEOUT_MS),
-                fetch(service, forwarded_params, build),
+                fetch_references_for_client_from_build_params(
+                    service,
+                    &state,
+                    &project,
+                    forwarded_params,
+                    build,
+                ),
             )
             .await
             .unwrap_or(Ok(None));
@@ -144,7 +145,9 @@ pub fn proxy_workspace_references(
 
             let mut matched_docs = vec![];
             let default_sources = state.get_build(&state.get_default_doc()).unwrap().sources();
+            tracing::warn!("default_sources");
             let sources_len = Walk::new(&project).count();
+            tracing::warn!("sources_len");
             for (i, entry) in Walk::new(&project).flatten().enumerate() {
                 if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                     continue;
@@ -184,8 +187,10 @@ pub fn proxy_workspace_references(
             matched_docs.par_iter().for_each(|doc_uri| {
                 state.set_build(doc_uri);
             });
+            tracing::warn!("par_iter set_build");
 
             let all_builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
+            tracing::warn!("all_builds_contains_source");
 
             matched_docs.par_iter().for_each(|d| {
                 if !all_builds_contains_source.contains(&state.uri_to_path(d).unwrap()) {
@@ -240,6 +245,7 @@ pub fn proxy_workspace_references(
 
             state.send_progress(&mut client, (i, unopened_docs.len()), &msg);
             state.remove_build(doc_uri);
+            tracing::warn!("{msg}");
         }
 
         for doc_of_build_path in opened_builds_contains_source {
@@ -267,6 +273,31 @@ pub fn proxy_workspace_references(
 
         Ok(Some(workspace_locations.into_iter().collect()))
     })
+}
+
+// TODO: rewrite with config
+#[inline]
+async fn fetch_references_for_client_from_build_params(
+    s: &mut async_lsp::ServerSocket,
+    state: &std::sync::Arc<State>,
+    project: &std::path::Path,
+    build_params: lsp::ReferenceParams,
+    build: std::sync::Arc<Build>,
+) -> Result<Option<Vec<lsp::Location>>, ResponseError> {
+    s.references(build_params)
+        .await
+        .map_err(Error::internal)
+        .map(Option::unwrap)
+        .map(|mut r| {
+            r.iter_mut().for_each(|l| {
+                if build.uri.canonicalize() == l.uri.canonicalize()
+                    && let Ok(source) = forward_build_range(&mut l.range, &build)
+                {
+                    l.uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                }
+            });
+            Some(r)
+        })
 }
 
 fn file_contains_text<P: AsRef<std::path::Path>>(
