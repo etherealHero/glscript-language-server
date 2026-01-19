@@ -41,19 +41,23 @@ pub struct State {
 /// State of client buffers
 impl State {
     // FIXME: some script duplicated. Validate uri_to_path fn
-    pub fn set_doc(&self, source_uri: &Uri, changes: &[lsp::TextDocumentContentChangeEvent]) {
+    pub fn set_doc(
+        &self,
+        source_uri: &Uri,
+        changes: &[lsp::TextDocumentContentChangeEvent],
+    ) -> anyhow::Result<()> {
         type RefMut<'a> = dashmap::mapref::one::RefMut<'a, PathBuf, Document>;
-        let path = self.uri_to_path(source_uri).unwrap();
+        let path = self.uri_to_path(source_uri)?;
         let mut doc = if let Some(old_doc) = self.documents.get_mut(&path) {
             old_doc
         } else {
-            let source = Source::from_path(&path, self.get_project()).unwrap();
+            let source = Source::from_path(&path, self.get_project())?;
             let source_ident = DocumentIdentifier::new(&source);
             let build_uri = {
                 // TODO: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
                 let proxy_ws = self.get_project().join(PROXY_WORKSPACE);
                 let emit_path = proxy_ws.join(format!("{}.js", source_ident.as_str()));
-                Uri::from_file_path(emit_path).unwrap()
+                Uri::from_file_path(emit_path).map_err(|_| anyhow::anyhow!("build_uri failed"))?
             };
 
             let doc = Document {
@@ -91,7 +95,7 @@ impl State {
             let new_text = changes[0].text.as_str();
             doc.buffer = Rope::from_str(new_text);
             patch_doc_content(&mut doc, new_text);
-            return;
+            return Ok(());
         }
 
         for change in changes {
@@ -106,6 +110,7 @@ impl State {
 
         let full_text = &doc.buffer.to_string();
         patch_doc_content(&mut doc, full_text);
+        Ok(())
     }
 
     pub fn get_doc(&self, source_uri: &Uri) -> anyhow::Result<Document> {
@@ -121,12 +126,12 @@ impl State {
         }
 
         let content = &[lsp::TextDocumentContentChangeEvent {
-            text: std::fs::read_to_string(path).unwrap(),
+            text: std::fs::read_to_string(path)?,
             range_length: None,
             range: None,
         }];
 
-        self.set_doc(source_uri, content);
+        self.set_doc(source_uri, content)?;
         self.get_doc(source_uri)
     }
 }
@@ -180,7 +185,7 @@ impl State {
                     };
                 }
 
-                let new_build_of_doc_with_version = self.set_build(doc_uri);
+                let new_build_of_doc_with_version = self.set_build(doc_uri).unwrap();
                 let forward_params = lsp::DidChangeTextDocumentParams {
                     text_document: lsp::VersionedTextDocumentIdentifier {
                         uri: new_build_of_doc_with_version.build.uri.clone(),
@@ -242,23 +247,23 @@ impl State {
 
 /// State of builds
 impl State {
-    pub fn set_build(&self, source_uri: &Uri) -> BuildWithVersion {
-        let path = &self.uri_to_path(source_uri).unwrap();
+    pub fn set_build(&self, source_uri: &Uri) -> anyhow::Result<BuildWithVersion> {
+        let path = &self.uri_to_path(source_uri)?;
 
         match self.builds.get_mut(path) {
             Some(mut b) => {
-                let new_build = Build::create(self, source_uri, Some(b.build.clone()));
+                let new_build = Build::create(self, source_uri, Some(b.build.clone()))?;
                 b.build = new_build.into();
                 b.version += 1;
             }
             None => {
-                let new_build = Build::create(self, source_uri, None);
+                let new_build = Build::create(self, source_uri, None)?;
                 let build_with_version = BuildWithVersion::new(new_build.into(), 1);
                 self.builds.insert(path.into(), build_with_version);
             }
         }
 
-        self.builds.get(path).map(|guard| guard.clone()).unwrap()
+        Ok(self.builds.get(path).map(|guard| guard.clone()).unwrap())
     }
 
     pub fn get_build(&self, source_uri: &Uri) -> Option<Arc<Build>> {

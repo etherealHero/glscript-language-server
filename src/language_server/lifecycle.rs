@@ -22,7 +22,7 @@ pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut
 
         let _ = std::fs::File::create_new(this.state.get_default_doc().to_file_path().unwrap());
 
-        this.state.set_build(&this.state.get_default_doc());
+        this.state.set_build(&this.state.get_default_doc()).unwrap();
 
         root_ws.uri = Uri::from_directory_path(proxy_ws_dir).unwrap();
     }

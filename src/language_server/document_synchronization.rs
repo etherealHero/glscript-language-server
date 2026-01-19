@@ -9,15 +9,17 @@ use crate::try_ensure_build;
 pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) -> NotifyResult {
     let doc = &params.text_document;
     if doc.language_id == JS_LANG_ID && !doc.uri.as_str().ends_with(BUILD_FILE_EXT) {
-        this.state.set_doc(
-            &doc.uri,
-            &[lsp::TextDocumentContentChangeEvent {
-                text: doc.text.clone(),
-                range_length: None,
-                range: None,
-            }],
-        );
-        let build_with_version = this.state.set_build(&doc.uri);
+        this.state
+            .set_doc(
+                &doc.uri,
+                &[lsp::TextDocumentContentChangeEvent {
+                    text: doc.text.clone(),
+                    range_length: None,
+                    range: None,
+                }],
+            )
+            .unwrap();
+        let build_with_version = this.state.set_build(&doc.uri).unwrap();
         let _ = this.server().did_open(lsp::DidOpenTextDocumentParams {
             text_document: lsp::TextDocumentItem::new(
                 build_with_version.build.uri.clone(),
@@ -49,7 +51,7 @@ pub fn proxy_did_change(
     let hash_prev = doc.dependency_hash;
 
     // 1. apply changes to raw document
-    this.state.set_doc(uri, &params.content_changes);
+    this.state.set_doc(uri, &params.content_changes).unwrap();
     let hash_new = this.state.get_doc(uri).unwrap().dependency_hash;
     let dep_changed = hash_prev != hash_new;
 

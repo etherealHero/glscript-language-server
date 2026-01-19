@@ -7,7 +7,6 @@ use crate::language_server::{DefRes, Error, definition_params, forward_build_ran
 use crate::proxy::{Canonicalize, Proxy, ResFut};
 use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
 use crate::state::State;
-use crate::types::Source;
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
 // FIXME: proxy d.ts symbols
@@ -143,31 +142,33 @@ pub fn proxy_workspace_references(
             use ignore::Walk;
             use rayon::prelude::*;
 
+            let (js, decl) = (&JS_FILE_EXT[1..], &DECL_FILE_EXT[1..]);
             let mut matched_docs = vec![];
-            let default_sources = state.get_build(&state.get_default_doc()).unwrap().sources();
+            let default_sources: Vec<_> = state
+                .get_build(&state.get_default_doc())
+                .unwrap()
+                .sources()
+                .iter()
+                .map(|s| project.join(s.as_str()))
+                .collect();
             tracing::warn!("default_sources");
-            let sources_len = Walk::new(&project).count();
-            tracing::warn!("sources_len");
-            for (i, entry) in Walk::new(&project).flatten().enumerate() {
+            for entry in Walk::new(&project).flatten() {
                 if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                     continue;
                 }
 
                 let path = entry.path();
-
-                if i % 10 == 0 {
-                    let msg = format!("scan {}", path.display());
-                    state.send_progress(&mut client, (i, sources_len), &msg);
-                }
-
-                if !file_contains_text(path, &def_literal).is_ok_and(|matched| matched) {
+                let doc_result = &state.path_to_uri(path).map(|uri| state.get_doc(&uri));
+                if let Ok(Ok(doc)) = doc_result {
+                    if !doc.content.contains(&def_literal) {
+                        continue;
+                    }
+                } else if !file_contains_text(path, &def_literal).is_ok_and(|matched| matched) {
                     continue;
                 };
 
-                let source = Source::from_path(path, &project);
-                if !source
-                    .as_ref()
-                    .is_ok_and(|s| s.ends_with(JS_FILE_EXT) || s.ends_with(DECL_FILE_EXT))
+                if doc_result.is_err()
+                    && !path.extension().is_some_and(|ext| ext == js || ext == decl)
                 {
                     continue;
                 }
@@ -176,16 +177,17 @@ pub fn proxy_workspace_references(
                     continue;
                 }
 
-                if source.as_ref().is_ok_and(|s| default_sources.contains(s)) {
+                if default_sources.contains(&path.to_path_buf()) {
                     continue;
                 }
 
                 matched_docs.push(Uri::from_file_path(path).unwrap());
             }
+            tracing::warn!("matched_docs filled"); // FIXME: too long
 
             state.send_progress(&mut client, (0, 0), "build project...");
             matched_docs.par_iter().for_each(|doc_uri| {
-                state.set_build(doc_uri);
+                let _ = state.set_build(doc_uri);
             });
             tracing::warn!("par_iter set_build");
 

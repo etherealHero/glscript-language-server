@@ -101,8 +101,8 @@ impl Build {
 
 impl Build {
     // #[tracing::instrument(skip_all, fields( doc = uri.as_str().split("/").last().unwrap() ))]
-    pub fn create(state: &State, uri: &Uri, prev_build: Option<Arc<Self>>) -> Self {
-        let doc = state.get_doc(uri).unwrap();
+    pub fn create(state: &State, uri: &Uri, prev_build: Option<Arc<Self>>) -> anyhow::Result<Self> {
+        let doc = state.get_doc(uri)?;
         let (mut initial_buf, sources_cap, tokens_cap) = {
             match prev_build {
                 Some(b) => (
@@ -169,13 +169,16 @@ impl Build {
             let debug_source = doc.source.to_string() + BUILD_FILE_EXT;
             let proxy_ws = state.get_project().join(PROXY_WORKSPACE);
             let debug_filepath = proxy_ws.join("./debug").join(debug_source);
+            let mut sourcemap_file = debug_filepath.clone();
+            sourcemap_file.add_extension("map");
             std::fs::create_dir_all(debug_filepath.parent().unwrap()).unwrap();
-            std::fs::write(debug_filepath, build).unwrap();
+            std::fs::write(debug_filepath.clone(), build).unwrap();
+            std::fs::write(sourcemap_file, String::from_utf8(sm_json)?).unwrap();
         }
 
         let emit_uri = (*doc.build_uri).clone();
 
-        Self::new(content, emit_uri, source_map, tokens_count)
+        Ok(Self::new(content, emit_uri, source_map, tokens_count))
     }
 }
 

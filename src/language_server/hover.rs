@@ -47,6 +47,9 @@ pub fn proxy_hover_with_decl_info(
             let msg = "⚠ No definiion available for this item.";
             return Ok(Some(prepend_hover(hover, msg)));
         }
+        // else { // TODO: add
+        // 1) is symbol declared in DEFAULT_INCLUDED
+        // 2) view Source of decl module (if not current client buffer <- store current client buffer in State)
 
         Ok(Some(hover))
     })
