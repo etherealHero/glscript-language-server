@@ -145,7 +145,10 @@ impl LanguageServer for Proxy {
         Box::pin(async move {
             state.create_progress(&mut client).await;
             state.send_progress(&mut client, (0, 0), "tsserver request declaration"); // for workspace search
-            let res = req.await;
+            let res = req.await.map(|res| {
+                let is_source = |l: &lsp::Location| state.get_build_by_emit_uri(&l.uri).is_none();
+                res.map(|locations| locations.into_iter().filter(is_source).collect())
+            });
             state.destroy_progress(&mut client);
             res
         })
