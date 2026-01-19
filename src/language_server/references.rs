@@ -1,5 +1,7 @@
 use async_lsp::lsp_types::{Url as Uri, request as R};
-use async_lsp::{LanguageClient, LanguageServer, ResponseError, lsp_types as lsp};
+use async_lsp::{ClientSocket, LanguageClient, LanguageServer, ResponseError, lsp_types as lsp};
+use std::path::Path;
+use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 
 use crate::builder::Build;
@@ -22,9 +24,7 @@ pub fn proxy_workspace_references(
     let uri = &params.text_document_position.text_document.uri;
     let pos = &params.text_document_position.position;
     let req_build = try_ensure_build!(this, uri, params, references);
-    tracing::warn!("try_ensure_build!");
     let definition_request = this.definition(definition_params(uri.clone(), pos.to_owned()));
-    tracing::warn!("definition_request");
 
     let mut service = this.server();
     let mut client = this.client();
@@ -32,26 +32,9 @@ pub fn proxy_workspace_references(
     let project = state.get_project().clone();
 
     Box::pin(async move {
-        let definition_response = definition_request.await;
-        tracing::warn!("definition_response");
-        let def_loc = {
-            let message = "Definition of references request not found";
-            match definition_response {
-                Ok(Some(ref definition)) => match definition {
-                    DefRes::Link(links) => match links.first() {
-                        Some(def_loc) => def_loc,
-                        None => return Err(Error::request_failed(message)),
-                    },
-                    _ => unreachable!(),
-                },
-                Ok(None) => return Err(Error::request_failed(message)),
-                Err(err) => return Err(err),
-            }
-        };
-        tracing::warn!("def_loc");
+        let def_loc = get_definition_location(definition_request).await?;
 
-        let definition_source_path = def_loc.target_uri.as_str();
-        if definition_source_path.ends_with(DECL_FILE_EXT) {
+        if def_loc.target_uri.as_str().ends_with(DECL_FILE_EXT) {
             let doc_pos = &mut params.text_document_position;
             try_forward_text_document_position_params!(state, req_build, doc_pos);
             return fetch_references_for_client_from_build_params(
@@ -64,35 +47,20 @@ pub fn proxy_workspace_references(
             .await;
         }
 
-        if !definition_source_path.ends_with(JS_FILE_EXT) {
-            let err = format!(
-                "Missmatched definition source extension,
-                expect '{JS_FILE_EXT}' or '{DECL_FILE_EXT}'.
-                References request aborted"
-            );
-            let err = err.split_whitespace().collect::<Vec<_>>().join(" ");
-            return Err(Error::request_failed(err));
+        if !def_loc.target_uri.as_str().ends_with(JS_FILE_EXT) {
+            return Err(Error::unexpected_source());
         }
 
         let mut workspace_locations = std::collections::HashSet::new();
         let mut is_sync_doc_failed = false;
-        let def_doc = state.get_doc(&def_loc.target_uri).unwrap();
-        tracing::warn!("def_doc");
-        let opened_builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
-        tracing::warn!("opened_builds_contains_source");
-        let def_pos = &def_loc.target_selection_range.start;
-        let def_literal = {
-            let s = def_loc.target_selection_range.start;
-            let start_pos = def_doc.buffer.line_to_char(s.line as usize) + s.character as usize;
-            let e = def_loc.target_selection_range.end;
-            let end_pos = def_doc.buffer.line_to_char(e.line as usize) + e.character as usize;
-            def_doc.buffer.slice(start_pos..end_pos).to_string()
-        };
-        tracing::warn!("def_literal");
+        let def_source = state.get_doc(&def_loc.target_uri).unwrap().source;
+        let opened_builds_contains_source = state.get_builds_contains_source(&def_source); // TODO: if global context ?
+        let unopened_docs = get_unopened_documents(&state, &mut client, &project, &def_loc);
 
         let mut traverse = async |doc_uri: &Uri, service: &mut async_lsp::ServerSocket| {
             let build = state.get_build(doc_uri).unwrap();
-            let position = match build.forward_src_position(def_pos, &def_doc.source) {
+            let def_pos = &def_loc.target_selection_range.start;
+            let position = match build.forward_src_position(def_pos, &def_source) {
                 Some(pos) => pos,
                 None => {
                     let doc_path = state.uri_to_path(doc_uri).unwrap();
@@ -138,77 +106,6 @@ pub fn proxy_workspace_references(
             Ok(())
         };
 
-        let unopened_docs: Vec<Uri> = {
-            use ignore::Walk;
-            use rayon::prelude::*;
-
-            let (js, decl) = (&JS_FILE_EXT[1..], &DECL_FILE_EXT[1..]);
-            let mut matched_docs = vec![];
-            let default_sources: Vec<_> = state
-                .get_build(&state.get_default_doc())
-                .unwrap()
-                .sources()
-                .iter()
-                .map(|s| project.join(s.as_str()))
-                .collect();
-            tracing::warn!("default_sources");
-            for entry in Walk::new(&project).flatten() {
-                if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-                    continue;
-                }
-
-                let path = entry.path();
-                let doc_result = &state.path_to_uri(path).map(|uri| state.get_doc(&uri));
-                if let Ok(Ok(doc)) = doc_result {
-                    if !doc.content.contains(&def_literal) {
-                        continue;
-                    }
-                } else if !file_contains_text(path, &def_literal).is_ok_and(|matched| matched) {
-                    continue;
-                };
-
-                if doc_result.is_err()
-                    && !path.extension().is_some_and(|ext| ext == js || ext == decl)
-                {
-                    continue;
-                }
-
-                if opened_builds_contains_source.contains(&path.to_path_buf()) {
-                    continue;
-                }
-
-                if default_sources.contains(&path.to_path_buf()) {
-                    continue;
-                }
-
-                matched_docs.push(Uri::from_file_path(path).unwrap());
-            }
-            tracing::warn!("matched_docs filled"); // FIXME: too long
-
-            state.send_progress(&mut client, (0, 0), "build project...");
-            matched_docs.par_iter().for_each(|doc_uri| {
-                let _ = state.set_build(doc_uri);
-            });
-            tracing::warn!("par_iter set_build");
-
-            let all_builds_contains_source = state.get_builds_contains_source(&def_doc.source); // TODO: if global context ?
-            tracing::warn!("all_builds_contains_source");
-
-            matched_docs.par_iter().for_each(|d| {
-                if !all_builds_contains_source.contains(&state.uri_to_path(d).unwrap()) {
-                    state.remove_build(d);
-                }
-            });
-
-            all_builds_contains_source
-                .into_par_iter()
-                .filter(|p| !opened_builds_contains_source.contains(p))
-                .map(|p| state.path_to_uri(&p).unwrap())
-                .collect()
-        };
-
-        // TODO: check (build def_literal slice) == (req def_literal)
-        //
         // TODO:
         // 1 DEPENDECY tree shaking (via strip common dependencies by def_literal pattern)
         //  1.1 disable tree shaking if def_pos in d.ts
@@ -247,7 +144,7 @@ pub fn proxy_workspace_references(
 
             state.send_progress(&mut client, (i, unopened_docs.len()), &msg);
             state.remove_build(doc_uri);
-            tracing::warn!("{msg}");
+            tracing::info!("{msg}");
         }
 
         for doc_of_build_path in opened_builds_contains_source {
@@ -275,6 +172,99 @@ pub fn proxy_workspace_references(
 
         Ok(Some(workspace_locations.into_iter().collect()))
     })
+}
+
+fn get_unopened_documents(
+    state: &Arc<State>,
+    client: &mut ClientSocket,
+    project: &Path,
+    def_loc: &lsp::LocationLink,
+) -> Vec<Uri> {
+    use ignore::Walk;
+    use rayon::prelude::*;
+
+    let def_source = state.get_doc(&def_loc.target_uri).unwrap().source;
+    let opened_builds_contains_source = state.get_builds_contains_source(&def_source); // TODO: if global context ?
+    let default_sources: Vec<_> = state
+        .get_build(&state.get_default_doc())
+        .unwrap()
+        .sources()
+        .iter()
+        .map(|s| project.join(s.as_str()))
+        .collect();
+    tracing::info!("default_sources collected");
+    let mut raw_entries = Vec::with_capacity(default_sources.len());
+    for entry in Walk::new(project).flatten() {
+        if entry.file_type().is_some_and(|ft| ft.is_file()) {
+            raw_entries.push(entry.path().to_owned());
+        }
+    }
+    tracing::info!("repository raw_entries walked");
+    let doc = |uri| state.get_doc(&uri);
+    let (js, decl) = (&JS_FILE_EXT[1..], &DECL_FILE_EXT[1..]);
+    let def_lit = get_definition_literal(def_loc, state);
+    let matched_docs: Vec<Uri> = raw_entries
+        .par_iter()
+        .filter(|p| match &state.path_to_uri(p.as_path()).map(doc) {
+            Ok(Ok(doc)) => doc.content.contains(&def_lit),
+            _ => file_contains_text(p, &def_lit).is_ok_and(|matched| matched),
+        })
+        .filter(|p| match &state.path_to_uri(p.as_path()).map(doc).is_ok() {
+            false => p.extension().is_some_and(|ext| ext == js || ext == decl),
+            true => true,
+        })
+        .filter(|path| !opened_builds_contains_source.contains(&path.to_path_buf()))
+        .filter(|path| !default_sources.contains(&path.to_path_buf()))
+        .filter_map(|path| Uri::from_file_path(path).ok())
+        .collect();
+    tracing::info!("matched_docs filled"); // FIXME: too long
+
+    state.send_progress(client, (0, 0), "build project...");
+    matched_docs.par_iter().for_each(|doc_uri| {
+        let _ = state.set_build(doc_uri);
+    });
+    tracing::info!("par_iter set_build completed");
+
+    let all_builds_contains_source = state.get_builds_contains_source(&def_source); // TODO: if global context ?
+
+    matched_docs.par_iter().for_each(|d| {
+        if !all_builds_contains_source.contains(&state.uri_to_path(d).unwrap()) {
+            state.remove_build(d);
+        }
+    });
+
+    all_builds_contains_source
+        .into_par_iter()
+        .filter(|p| !opened_builds_contains_source.contains(p))
+        .map(|p| state.path_to_uri(&p).unwrap())
+        .collect()
+}
+
+fn get_definition_literal(def_loc: &lsp::LocationLink, state: &Arc<State>) -> String {
+    let def_doc = state.get_doc(&def_loc.target_uri).unwrap();
+    let s = def_loc.target_selection_range.start;
+    let start_pos = def_doc.buffer.line_to_char(s.line as usize) + s.character as usize;
+    let e = def_loc.target_selection_range.end;
+    let end_pos = def_doc.buffer.line_to_char(e.line as usize) + e.character as usize;
+    def_doc.buffer.slice(start_pos..end_pos).to_string()
+}
+
+async fn get_definition_location(
+    definition_request: ResFut<R::GotoDefinition>,
+) -> Result<lsp::LocationLink, ResponseError> {
+    let definition_response = definition_request.await;
+    let message = "Definition of references request not found";
+    match definition_response {
+        Ok(Some(ref definition)) => match definition {
+            DefRes::Link(links) => match links.first() {
+                Some(def_loc) => Ok(def_loc.to_owned()),
+                None => Err(Error::request_failed(message)),
+            },
+            _ => unreachable!(),
+        },
+        Ok(None) => Err(Error::request_failed(message)),
+        Err(err) => Err(err),
+    }
 }
 
 // TODO: rewrite with config

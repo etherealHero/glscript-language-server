@@ -3,7 +3,7 @@ use async_lsp::lsp_types::{notification::Notification, request::Request};
 use async_lsp::{ErrorCode, LanguageServer, ResponseError, lsp_types as lsp};
 
 use crate::builder::Build;
-use crate::proxy::{Proxy, ResFut};
+use crate::proxy::{DECL_FILE_EXT, JS_FILE_EXT, Proxy, ResFut};
 use crate::types::Source;
 
 mod common_features;
@@ -28,6 +28,12 @@ impl Error {
 
     pub fn request_failed(e: impl core::fmt::Display) -> ResponseError {
         ResponseError::new(ErrorCode::REQUEST_FAILED, e)
+    }
+
+    pub fn unexpected_source() -> ResponseError {
+        let reason = "Missmatched source extension";
+        let err = format!("{reason}, expect '{JS_FILE_EXT}' or '{DECL_FILE_EXT}'. Request aborted");
+        ResponseError::new(ErrorCode::REQUEST_FAILED, err)
     }
 }
 

@@ -1,13 +1,16 @@
 use async_lsp::lsp_types::request as R;
-use async_lsp::{LanguageServer, lsp_types as lsp};
+use async_lsp::{LanguageServer, ResponseError, lsp_types as lsp};
 
 use crate::builder::BUILD_FILE_EXT;
 use crate::language_server::{DefRes, Error, forward_build_range};
 use crate::proxy::{Canonicalize, DECL_FILE_EXT, Proxy, ResFut};
+use crate::state::State;
+use crate::types::Source;
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 
 pub fn proxy_definition(
     this: &mut Proxy,
@@ -29,81 +32,86 @@ pub fn proxy_definition(
         }
 
         let project = state.get_project();
-        let forward_location_links = |links: Vec<lsp::LocationLink>| -> Result<_, _> {
-            let mut forward_links = HashSet::with_capacity(links.len());
-            for mut link in links {
-                if link.target_uri.as_str().ends_with(DECL_FILE_EXT) {
-                    forward_links.insert(HashLocationLink(link));
-                    continue;
-                }
-
-                // TODO: forward build file ?
-                // emit build file with global doc constant to debug anywhere ?
-                if link.target_uri.as_str().ends_with(BUILD_FILE_EXT) {
-                    continue;
-                }
-
-                if let Some(ref any_build) = state.get_build_by_emit_uri(&link.target_uri) {
-                    let source = forward_build_range(&mut link.target_range, any_build)?;
-
-                    if !req_build_sources.contains(&source) {
-                        continue;
-                    }
-
-                    forward_build_range(&mut link.target_selection_range, any_build)?;
-
-                    let path = &project.join(source.as_str());
-                    link.target_uri = state.path_to_uri(path).unwrap();
-                    link.origin_selection_range = None;
-                    forward_links.insert(HashLocationLink(link));
-                    continue;
-                }
-
-                if let Ok(doc) = state.get_doc(&link.target_uri) {
-                    if !req_build_sources.contains(&*doc.source) {
-                        continue;
-                    }
-
-                    link.origin_selection_range = None;
-                    forward_links.insert(HashLocationLink(link));
-                }
-            }
-            let forward_links = forward_links
-                .into_iter()
-                .map(|mut h| {
-                    if let Ok(path) = state.uri_to_path(&h.0.target_uri) {
-                        h.0.target_uri = state.path_to_uri(&path).unwrap();
-                    }
-                    h.0
-                })
-                .collect();
-            Ok(DefRes::Link(forward_links))
-        };
-
+        let fwd = |l: _| -> Result<_, _> { forward(l, &state, &req_build_sources, project) };
         let ts_definition_response = res?.unwrap();
         let forward_res: DefRes = match ts_definition_response {
-            DefRes::Link(location_links) => forward_location_links(location_links)?,
-            DefRes::Scalar(location) => forward_location_links(vec![lsp::LocationLink {
+            DefRes::Link(location_links) => fwd(location_links)?,
+            DefRes::Scalar(location) => fwd(vec![lsp::LocationLink {
                 origin_selection_range: None,
                 target_uri: location.uri.clone(),
                 target_range: location.range,
                 target_selection_range: location.range,
             }])?,
-            DefRes::Array(locations) => forward_location_links(
-                locations
-                    .iter()
-                    .map(|l| lsp::LocationLink {
-                        origin_selection_range: None,
-                        target_uri: l.uri.clone(),
-                        target_range: l.range,
-                        target_selection_range: l.range,
-                    })
-                    .collect(),
-            )?,
+            DefRes::Array(locations) => fwd(locations
+                .iter()
+                .map(|l| lsp::LocationLink {
+                    origin_selection_range: None,
+                    target_uri: l.uri.clone(),
+                    target_range: l.range,
+                    target_selection_range: l.range,
+                })
+                .collect())?,
         };
 
         Ok(Some(forward_res))
     })
+}
+
+/// forward back build locacions into client buffer locations
+fn forward(
+    links: Vec<lsp::LocationLink>,
+    state: &State,
+    req_build_sources: &HashSet<Source>,
+    project: &Path,
+) -> Result<lsp::GotoDefinitionResponse, ResponseError> {
+    let mut forward_links = HashSet::with_capacity(links.len());
+    for mut link in links {
+        if link.target_uri.as_str().ends_with(DECL_FILE_EXT) {
+            forward_links.insert(HashLocationLink(link));
+            continue;
+        }
+
+        // TODO: forward build file ?
+        // emit build file with global doc constant to debug anywhere ?
+        if link.target_uri.as_str().ends_with(BUILD_FILE_EXT) {
+            continue;
+        }
+
+        if let Some(ref any_build) = state.get_build_by_emit_uri(&link.target_uri) {
+            let source = forward_build_range(&mut link.target_range, any_build)?;
+
+            if !req_build_sources.contains(&source) {
+                continue;
+            }
+
+            forward_build_range(&mut link.target_selection_range, any_build)?;
+
+            let path = &project.join(source.as_str());
+            link.target_uri = state.path_to_uri(path).unwrap();
+            link.origin_selection_range = None;
+            forward_links.insert(HashLocationLink(link));
+            continue;
+        }
+
+        if let Ok(doc) = state.get_doc(&link.target_uri) {
+            if !req_build_sources.contains(&*doc.source) {
+                continue;
+            }
+
+            link.origin_selection_range = None;
+            forward_links.insert(HashLocationLink(link));
+        }
+    }
+    let forward_links = forward_links
+        .into_iter()
+        .map(|mut h| {
+            if let Ok(path) = state.uri_to_path(&h.0.target_uri) {
+                h.0.target_uri = state.path_to_uri(&path).unwrap();
+            }
+            h.0
+        })
+        .collect();
+    Ok(DefRes::Link(forward_links))
 }
 
 #[derive(Debug, Eq)]
