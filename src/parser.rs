@@ -88,9 +88,12 @@ fn get_pairs<'a>(raw_text: &'a str) -> Pairs<'a> {
 }
 
 pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
+    let raw_text_ptr = raw_text.as_ptr() as usize;
     let pairs = get_pairs(raw_text);
+    let (mut line, mut offset, mut pending) = (0, 0, None::<Pending>);
     let mut out = Vec::with_capacity(raw_text.lines().count());
-    let (mut line, mut offset, mut pos, mut pending) = (0, 0, 0usize, None::<Pending>);
+    let mut pos;
+
     let flush_pending_token = |p: Pending| {
         let pending_range = p.init_pos..p.init_pos + p.pending_len as usize;
         let text = unsafe { raw_text.get_unchecked(pending_range) };
@@ -105,14 +108,15 @@ pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
         let (rule, pair_str) = (pair.as_rule(), pair.as_str());
         let pair_len = pair_str.len() as u32;
         let emit_span = || Span::new((line, offset).into(), pair_len);
+
+        pos = unsafe { (pair_str.as_ptr() as usize).unchecked_sub(raw_text_ptr) };
+
         let emit_token = || {
-            let range = pos..pos + pair_len as usize;
-            let text = unsafe { raw_text.get_unchecked(range) };
+            let text = unsafe { raw_text.get_unchecked(pos..pos + pair_len as usize) };
             RawToken::new((line, offset).into(), text)
         };
         let emit_path_literal = || {
-            let path_range = pos + 1..pos + pair_len as usize - 1;
-            let path = unsafe { raw_text.get_unchecked(path_range) };
+            let path = unsafe { raw_text.get_unchecked(pos + 1..pos + pair_len as usize - 1) };
             PathLiteral::new((line, offset).into(), path)
         };
         let uncommon_stmt = matches!(
@@ -144,7 +148,6 @@ pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
             },
         };
 
-        pos += pair_len as usize;
         match matches!(rule, Rule::LineTerminator | Rule::CommonWithLineEnding) {
             true => (offset = 0, line += 1),
             false => (offset += pair_str.chars().count() as u32, ()),
