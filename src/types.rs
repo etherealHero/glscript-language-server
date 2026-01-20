@@ -99,7 +99,7 @@ impl DocumentIdentifier {
     }
 }
 
-pub const IDENTIFIER_PREFIX: &str = "$MODULE_";
+pub const SCRIPT_IDENTIFIER_PREFIX: &str = "$glscript_file_decl_";
 const LINK_START_STMT: &str = "\n/** {@link ";
 const LEFT_OFFSET: usize = LINK_START_STMT.len();
 
@@ -114,7 +114,7 @@ impl DocumentDeclarationStatement {
         stmt.push_str(" {'");
         stmt.push_str(source);
         stmt.push_str("'} ");
-        stmt.push_str(IDENTIFIER_PREFIX);
+        stmt.push_str(SCRIPT_IDENTIFIER_PREFIX);
         stmt.push_str(identifier);
         stmt.push_str(" */{};\n");
         Self(stmt)
@@ -131,10 +131,10 @@ pub struct DocumentLinkStatement {
 
 impl DocumentLinkStatement {
     pub fn create(source: &Source, identifier: &DocumentIdentifier) -> Self {
-        let right_offset = LEFT_OFFSET + IDENTIFIER_PREFIX.len() + identifier.len();
+        let right_offset = LEFT_OFFSET + SCRIPT_IDENTIFIER_PREFIX.len() + identifier.len();
         let mut stmt = String::with_capacity(!0u8 as usize);
         stmt.push_str(LINK_START_STMT);
-        stmt.push_str(IDENTIFIER_PREFIX);
+        stmt.push_str(SCRIPT_IDENTIFIER_PREFIX);
         stmt.push_str(identifier);
         stmt.push_str(" '");
         stmt.push_str(source);
@@ -143,9 +143,9 @@ impl DocumentLinkStatement {
     }
 
     pub fn undefined() -> Self {
-        const RIGHT_OFFSET: usize = LEFT_OFFSET + IDENTIFIER_PREFIX.len() + 1;
+        const RIGHT_OFFSET: usize = LEFT_OFFSET + SCRIPT_IDENTIFIER_PREFIX.len() + 1;
         const SUFFIX: &str = "0 '0'} */{};\n";
-        let undefined_stmt = LINK_START_STMT.to_owned() + IDENTIFIER_PREFIX + SUFFIX;
+        let undefined_stmt = LINK_START_STMT.to_owned() + SCRIPT_IDENTIFIER_PREFIX + SUFFIX;
         Self::new(LEFT_OFFSET as u32, RIGHT_OFFSET as u32, undefined_stmt)
     }
 }

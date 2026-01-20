@@ -4,7 +4,7 @@ use tokio::time::{Duration, timeout};
 
 use crate::language_server::{DefRes, Error, definition_params, forward_build_range};
 use crate::proxy::{Proxy, ResFut, ResReqProxy};
-use crate::types::IDENTIFIER_PREFIX;
+use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
 pub fn proxy_hover_with_decl_info(
@@ -78,8 +78,9 @@ fn strip_module_hash(mut hover: lsp::Hover) -> lsp::Hover {
     type H = lsp::HoverContents;
     type S = lsp::MarkedString;
 
-    let re = regex::Regex::new(&format!(r"{}\w+", regex::escape(IDENTIFIER_PREFIX))).unwrap();
-    let patch = |s: &str| re.replace_all(s, "MODULE").to_string();
+    let re =
+        regex::Regex::new(&format!(r"{}\w+", regex::escape(SCRIPT_IDENTIFIER_PREFIX))).unwrap();
+    let patch = |s: &str| re.replace_all(s, "ScriptFile").to_string();
 
     match &mut hover.contents {
         H::Scalar(S::String(s)) => *s = patch(s),

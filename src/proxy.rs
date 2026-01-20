@@ -6,7 +6,7 @@ use async_lsp::lsp_types::{Url as Uri, request::Request};
 use async_lsp::router::Router;
 use async_lsp::{ClientSocket, ResponseError, ServerSocket};
 
-use crate::forward::{ForwardingLayer, TService};
+use crate::forward_layer::{ForwardingLayer, TService};
 use crate::state::State;
 
 pub const JS_LANG_ID: &str = "javascript";

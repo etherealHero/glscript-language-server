@@ -3,6 +3,7 @@ use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::language_server::Error;
 use crate::proxy::{Proxy, ResFut};
+use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
 pub fn proxy_completion(
@@ -13,22 +14,36 @@ pub fn proxy_completion(
     let uri = &params.text_document_position.text_document.uri;
     let build = try_ensure_build!(this, uri, params, completion);
     let state = this.state.clone();
+
     Box::pin(async move {
         type Res = lsp::CompletionResponse;
-        let forward = forward_build_completion_item;
+
         let doc_pos = &mut params.text_document_position;
+        let f = |mut item: lsp::CompletionItem| {
+            if item.label.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
+                return None;
+            };
+            forward_build_completion_item(&mut item);
+            Some(item)
+        };
+
         try_forward_text_document_position_params!(state, build, doc_pos);
 
         s.completion(params)
             .await
             .map_err(Error::internal)
             .map(|r| r.unwrap())
-            .map(|mut response| {
+            .map(|response| {
+                use rayon::prelude::*;
+
                 match response {
-                    Res::Array(ref mut items) => items.iter_mut().for_each(forward),
-                    Res::List(ref mut list) => list.items.iter_mut().for_each(forward),
-                };
-                Some(response)
+                    Res::Array(items) => Res::Array(items.into_par_iter().filter_map(f).collect()),
+                    Res::List(list) => Res::List(lsp::CompletionList {
+                        is_incomplete: list.is_incomplete,
+                        items: list.items.into_par_iter().filter_map(f).collect(),
+                    }),
+                }
+                .into()
             })
     })
 }
