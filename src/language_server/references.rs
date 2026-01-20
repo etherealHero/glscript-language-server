@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_lsp::lsp_types::{Url as Uri, request as R};
-use async_lsp::{ClientSocket, LanguageClient, LanguageServer, ResponseError, lsp_types as lsp};
+use async_lsp::{LanguageClient, LanguageServer, ResponseError, lsp_types as lsp};
 use tokio::time::{Duration, timeout};
 
 use crate::builder::Build;
@@ -48,7 +48,7 @@ pub fn proxy_workspace_references(
         let mut is_sync_doc_failed = false;
         let def_source = st.get_doc(&def_loc.target_uri).unwrap().source;
         let opened_builds_contains_source = st.get_builds_contains_source(&def_source); // TODO: if global context ?
-        let unopened_docs = get_unopened_documents(&st, &mut client, &root, &def_loc);
+        let unopened_docs = get_unopened_documents(&st, &root, &def_loc);
 
         // TODO:
         // 1 DEPENDECY tree shaking (via strip common dependencies by def_literal pattern)
@@ -176,7 +176,6 @@ async fn traverse(
 
 fn get_unopened_documents(
     state: &Arc<State>,
-    client: &mut ClientSocket,
     project: &Path,
     def_loc: &lsp::LocationLink,
 ) -> Vec<Uri> {
@@ -187,43 +186,44 @@ fn get_unopened_documents(
     let opened_builds_contains_source = state.get_builds_contains_source(&def_source); // TODO: if global context ?
     let default_sources: Vec<_> = state
         .get_build(&state.get_default_doc())
-        .unwrap()
+        .unwrap_or_else(|| state.set_build(&state.get_default_doc()).unwrap().build) //
         .sources()
         .iter()
         .map(|s| project.join(s.as_str()))
         .collect();
-    tracing::info!("default_sources collected");
+    tracing::info!("raw_entries scan...");
     let mut raw_entries = Vec::with_capacity(default_sources.len());
     for entry in Walk::new(project).flatten() {
         if entry.file_type().is_some_and(|ft| ft.is_file()) {
             raw_entries.push(entry.path().to_owned());
         }
     }
-    tracing::info!("repository raw_entries walked");
-    let doc = |uri| state.get_doc(&uri);
+    tracing::info!("raw_entries scanned\nrepository indexing...");
     let (js, decl) = (&JS_FILE_EXT[1..], &DECL_FILE_EXT[1..]);
     let def_lit = get_definition_literal(def_loc, state);
     let matched_docs: Vec<Uri> = raw_entries
         .par_iter()
-        .filter(|p| match &state.path_to_uri(p.as_path()).map(doc) {
-            Ok(Ok(doc)) => doc.content.contains(&def_lit),
-            _ => file_contains_text(p, &def_lit).is_ok_and(|matched| matched),
-        })
-        .filter(|p| match &state.path_to_uri(p.as_path()).map(doc).is_ok() {
-            false => p.extension().is_some_and(|ext| ext == js || ext == decl),
-            true => true,
-        })
-        .filter(|path| !opened_builds_contains_source.contains(&path.to_path_buf()))
-        .filter(|path| !default_sources.contains(&path.to_path_buf()))
-        .filter_map(|path| Uri::from_file_path(path).ok())
-        .collect();
-    tracing::info!("matched_docs filled"); // FIXME: too long
+        .filter_map(|p| {
+            let uri = state.path_to_uri(p.as_path()).ok();
+            if uri.is_none() && !p.extension().is_some_and(|ext| ext == js || ext == decl) {
+                return None;
+            }
+            let matched = match uri.as_ref().and_then(|u| state.get_doc(u).ok()) {
+                Some(doc) => doc.content.contains(&def_lit),
+                None => file_contains_text(p, &def_lit).ok()?,
+            };
+            if !matched
+                || opened_builds_contains_source.contains(&p.to_path_buf())
+                || default_sources.contains(&p.to_path_buf())
+            {
+                return None;
+            }
 
-    state.send_progress(client, (0, 0), "build project...");
-    matched_docs.par_iter().for_each(|doc_uri| {
-        let _ = state.set_build(doc_uri);
-    });
-    tracing::info!("par_iter set_build completed");
+            let _ = state.set_build(uri.as_ref().unwrap());
+            uri
+        })
+        .collect();
+    tracing::info!("repository indexed"); // TODO: check if too long
 
     let all_builds_contains_source = state.get_builds_contains_source(&def_source); // TODO: if global context ?
 
@@ -292,21 +292,14 @@ async fn fetch_references_for_client_from_build_params(
         })
 }
 
-fn file_contains_text<P: AsRef<std::path::Path>>(
-    filename: P,
-    search_term: &str,
-) -> anyhow::Result<bool> {
-    use std::io::BufRead;
+fn file_contains_text<P: AsRef<Path>>(filename: P, search_term: &str) -> anyhow::Result<bool> {
+    use memmap2::Mmap;
+    use std::fs::File;
 
-    let file = std::fs::File::open(filename)?;
-    let reader = std::io::BufReader::new(file);
+    let file = File::open(filename)?;
+    let mmap = unsafe { Mmap::map(&file)? };
 
-    for line_result in reader.lines() {
-        let line = line_result?;
-        if line.contains(search_term) {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
+    Ok(mmap
+        .windows(search_term.len())
+        .any(|window| window == search_term.as_bytes()))
 }
