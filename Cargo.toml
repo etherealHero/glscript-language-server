@@ -70,6 +70,10 @@ opt-level = 3
 codegen-units = 1
 lto = "thin"
 
+[profile.dev]
+opt-level = 3
+debug = true
+
 [[test]]
 name = "parser"
 path = "src/unit_tests/parser.rs"

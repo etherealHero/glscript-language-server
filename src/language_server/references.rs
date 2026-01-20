@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_lsp::lsp_types::{Url as Uri, request as R};
@@ -12,6 +13,8 @@ use crate::proxy::{Canonicalize, Proxy, ResFut};
 use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
 use crate::state::State;
 use crate::{try_ensure_build, try_forward_text_document_position_params};
+
+const TEMPORARY_SCRIPT: &str = "file:///_.js";
 
 pub fn proxy_workspace_references(
     this: &mut Proxy,
@@ -30,14 +33,14 @@ pub fn proxy_workspace_references(
     let mut client = this.client();
     let st = this.state.clone();
     let root = st.get_project().clone();
+    let temp = Some(Uri::from_str(TEMPORARY_SCRIPT).unwrap());
 
     Box::pin(async move {
         let def_loc = get_definition_location(definition_request).await?;
         if def_loc.target_uri.as_str().ends_with(DECL_FILE_EXT) {
             let doc_pos = &mut p.text_document_position;
             try_forward_text_document_position_params!(st, req_build, doc_pos);
-            return fetch_references_for_client_from_build_params(&mut s, &st, &root, p, req_build)
-                .await;
+            return fetch_with_build_params(&mut s, &st, &root, p, req_build, None).await;
         }
 
         if !def_loc.target_uri.as_str().ends_with(JS_FILE_EXT) {
@@ -64,7 +67,7 @@ pub fn proxy_workspace_references(
                 let build = st.get_build(doc_uri).unwrap();
                 service.did_open(lsp::DidOpenTextDocumentParams {
                     text_document: lsp::TextDocumentItem::new(
-                        build.uri.clone(),
+                        temp.clone().unwrap(),
                         JS_LANG_ID.into(),
                         1,
                         build.content.clone(),
@@ -80,16 +83,16 @@ pub fn proxy_workspace_references(
             let doc_path = st.uri_to_path(doc_uri).unwrap();
             let doc_path = doc_path.strip_prefix(&root).unwrap_or(&doc_path);
             let msg = format!("tsserver request {}", doc_path.display());
-            let build = st.get_build(doc_uri).unwrap();
+            let t = temp.clone();
 
-            if traverse(doc_uri, &def_loc, &mut s, &st, &root, &mut ws_locs)
+            if traverse(doc_uri, &def_loc, &mut s, &st, &root, &mut ws_locs, t)
                 .await
                 .is_err()
             {
                 is_sync_doc_failed = true;
             };
             let _ = s.did_close(lsp::DidCloseTextDocumentParams {
-                text_document: lsp::TextDocumentIdentifier::new(build.uri.clone()),
+                text_document: lsp::TextDocumentIdentifier::new(temp.clone().unwrap()),
             });
 
             st.send_progress(&mut client, (i, unopened_docs.len()), &msg);
@@ -103,7 +106,7 @@ pub fn proxy_workspace_references(
             }
             let doc_uri = st.path_to_uri(&doc_of_build_path).unwrap();
             st.commit_build_changes(&doc_uri, &mut s);
-            traverse(&doc_uri, &def_loc, &mut s, &st, &root, &mut ws_locs).await?;
+            traverse(&doc_uri, &def_loc, &mut s, &st, &root, &mut ws_locs, None).await?;
         }
 
         if st.cancel_received.load() {
@@ -128,27 +131,29 @@ async fn traverse(
     doc_uri: &Uri,
     def_loc: &lsp::LocationLink,
     service: &mut async_lsp::ServerSocket,
-    state: &Arc<State>,
-    project: &Path,
+    st: &Arc<State>,
+    root: &Path,
     workspace_locations: &mut HashSet<lsp::Location>,
+    temp: Option<Uri>,
 ) -> Result<(), ResponseError> {
-    let build = state.get_build(doc_uri).unwrap();
+    let build = st.get_build(doc_uri).unwrap();
     let def_pos = &def_loc.target_selection_range.start;
-    let def_source = state.get_doc(&def_loc.target_uri).unwrap().source;
+    let def_source = st.get_doc(&def_loc.target_uri).unwrap().source;
     let position = match build.forward_src_position(def_pos, &def_source) {
         Some(pos) => pos,
         None => {
-            let doc_path = state.uri_to_path(doc_uri).unwrap();
-            let doc_path = doc_path.strip_prefix(project).unwrap_or(&doc_path);
+            let doc_path = st.uri_to_path(doc_uri).unwrap();
+            let doc_path = doc_path.strip_prefix(root).unwrap_or(&doc_path);
             let err = format!("Sync doc ({}) failed. Request aborted", doc_path.display());
             tracing::error!(err);
             return Err(Error::request_failed(err)); // FIXME:
         }
     };
 
+    let req_uri = temp.clone().unwrap_or_else(|| build.uri.clone());
     let fwd_params = lsp::ReferenceParams {
         text_document_position: lsp::TextDocumentPositionParams::new(
-            lsp::TextDocumentIdentifier::new(build.uri.clone()),
+            lsp::TextDocumentIdentifier::new(req_uri),
             position,
         ),
         work_done_progress_params: lsp::WorkDoneProgressParams::default(),
@@ -160,7 +165,7 @@ async fn traverse(
 
     let fetch_response = timeout(
         Duration::from_millis(DEFAULT_TIMEOUT_MS),
-        fetch_references_for_client_from_build_params(service, state, project, fwd_params, build),
+        fetch_with_build_params(service, st, root, fwd_params, build, temp),
     )
     .await
     .unwrap_or(Ok(None));
@@ -198,7 +203,7 @@ fn get_unopened_documents(
             raw_entries.push(entry.path().to_owned());
         }
     }
-    tracing::info!("raw_entries scanned\nrepository indexing...");
+    tracing::info!("raw_entries scanned; repository indexing...");
     let (js, decl) = (&JS_FILE_EXT[1..], &DECL_FILE_EXT[1..]);
     let def_lit = get_definition_literal(def_loc, state);
     let matched_docs: Vec<Uri> = raw_entries
@@ -269,12 +274,13 @@ async fn get_definition_location(
 
 // TODO: rewrite with config
 #[inline]
-async fn fetch_references_for_client_from_build_params(
+async fn fetch_with_build_params(
     s: &mut async_lsp::ServerSocket,
     state: &Arc<State>,
     project: &Path,
     build_params: lsp::ReferenceParams,
     build: Arc<Build>,
+    temp: Option<Uri>,
 ) -> Result<Option<Vec<lsp::Location>>, ResponseError> {
     s.references(build_params)
         .await
@@ -282,7 +288,10 @@ async fn fetch_references_for_client_from_build_params(
         .map(Option::unwrap)
         .map(|mut r| {
             r.iter_mut().for_each(|l| {
-                if build.uri.canonicalize() == l.uri.canonicalize()
+                let build_uri = || build.uri.canonicalize().unwrap_or(build.uri.clone());
+                let req_uri = temp.clone().unwrap_or_else(build_uri);
+                let loc_uri = l.uri.canonicalize().unwrap_or(l.uri.clone());
+                if req_uri == loc_uri
                     && let Ok(source) = forward_build_range(&mut l.range, &build)
                 {
                     l.uri = state.path_to_uri(&project.join(source.as_str())).unwrap();

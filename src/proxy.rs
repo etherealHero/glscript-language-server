@@ -19,12 +19,16 @@ pub type ResFut<R> = BoxFuture<'static, Result<<R as Request>::Result, ResponseE
 pub type ResReqProxy<R> = Result<<R as Request>::Result, ResponseError>;
 
 pub trait Canonicalize {
-    fn canonicalize(&self) -> Self;
+    fn canonicalize(&self) -> anyhow::Result<Self>
+    where
+        Self: std::marker::Sized;
 }
 
 impl Canonicalize for Uri {
-    fn canonicalize(&self) -> Self {
-        Uri::from_file_path(self.to_file_path().unwrap()).unwrap()
+    fn canonicalize(&self) -> anyhow::Result<Self> {
+        let msg = "uri canonicalize failed";
+        let path = self.to_file_path().map_err(|_| anyhow::Error::msg(msg))?;
+        Uri::from_file_path(path).map_err(|_| anyhow::Error::msg(msg))
     }
 }
 

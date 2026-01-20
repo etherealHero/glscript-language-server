@@ -283,10 +283,10 @@ impl State {
     }
 
     pub fn get_build_by_emit_uri(&self, emit_uri: &Uri) -> Option<Arc<Build>> {
-        let emit_uri_canonicalized = emit_uri.canonicalize();
+        let emit_uri_canonicalized = emit_uri.canonicalize().unwrap_or_else(|_| emit_uri.clone());
         self.builds
             .iter()
-            .find(|e| e.build.uri.canonicalize() == emit_uri_canonicalized)
+            .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
             .map(|e| e.build.clone())
     }
 
@@ -318,7 +318,7 @@ impl State {
         let path = self.project_path.get().unwrap();
         let path = path.join(PROXY_WORKSPACE).join("DEFAULT_INCLUDED.js");
         let default_doc = self.path_to_uri(&path);
-        default_doc.unwrap_or(Uri::from_file_path(path).unwrap().canonicalize())
+        default_doc.unwrap_or(Uri::from_file_path(path).unwrap().canonicalize().unwrap())
     }
 }
 
@@ -350,7 +350,7 @@ impl State {
         let canonicalized_path = &dunce::canonicalize(dunce::simplified(path))?;
         let uri = Uri::from_file_path(canonicalized_path);
         let uri = uri.map_err(|_| anyhow::anyhow!("path to uri fail: {path:?}"))?;
-        let canonicalized_uri = uri.canonicalize();
+        let canonicalized_uri = uri.canonicalize()?;
 
         self.path_to_uri
             .insert(path.to_path_buf(), canonicalized_uri.clone());
