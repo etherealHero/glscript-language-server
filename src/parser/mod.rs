@@ -1,7 +1,7 @@
 use tokens::{GlScriptSubsetGrammar, Rule};
-use tokens::{Pairs, PathLiteral, Pending, RawToken, Span};
+use tokens::{Pairs, PathLiteral, Pending, Span};
 
-pub use tokens::{LineCol, Token};
+pub use tokens::{LineCol, RawToken, Token};
 
 mod tokens;
 

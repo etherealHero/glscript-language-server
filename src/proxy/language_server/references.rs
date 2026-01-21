@@ -14,7 +14,7 @@ use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
 use crate::state::State;
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
-const TEMPORARY_SCRIPT: &str = "file:///_.js";
+const TEMPORARY_SCRIPT: &str = "file:///.virtual/refs.js";
 
 pub fn proxy_workspace_references(
     this: &mut Proxy,
@@ -63,9 +63,9 @@ pub fn proxy_workspace_references(
         //       ,then add second traverse (united SM & content) with exclude non matching dependencies
         //  - impl traverse emit fn without separate sourcemaps & content ctx (inspire by single loop)
         for (i, doc_uri) in unopened_docs.iter().enumerate() {
-            let try_open = |service: &mut async_lsp::ServerSocket| {
+            let try_open = |s: &mut async_lsp::ServerSocket| {
                 let build = st.get_build(doc_uri).unwrap();
-                service.did_open(lsp::DidOpenTextDocumentParams {
+                s.did_open(lsp::DidOpenTextDocumentParams {
                     text_document: lsp::TextDocumentItem::new(
                         temp.clone().unwrap(),
                         JS_LANG_ID.into(),
@@ -218,7 +218,7 @@ fn get_unopened_documents(
                 return None;
             }
 
-            let _ = state.set_build(uri.as_ref().unwrap());
+            let _ = state.set_build_by_tree_shaking(uri.as_ref().unwrap(), &def_lit);
             uri
         })
         .collect();

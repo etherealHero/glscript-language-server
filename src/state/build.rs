@@ -10,23 +10,35 @@ use crate::types::{BuildWithVersion, Source};
 
 /// State of builds
 impl State {
-    pub fn set_build(&self, source_uri: &Uri) -> anyhow::Result<BuildWithVersion> {
+    fn build(&self, source_uri: &Uri, pat: Option<&str>) -> anyhow::Result<BuildWithVersion> {
         let path = &self.uri_to_path(source_uri)?;
 
         match self.builds.get_mut(path) {
             Some(mut b) => {
-                let new_build = Build::create(self, source_uri, Some(b.build.clone()))?;
+                let new_build = Build::create(self, source_uri, Some(b.build.clone()), pat)?;
                 b.build = new_build.into();
                 b.version += 1;
             }
             None => {
-                let new_build = Build::create(self, source_uri, None)?;
+                let new_build = Build::create(self, source_uri, None, pat)?;
                 let build_with_version = BuildWithVersion::new(new_build.into(), 1);
                 self.builds.insert(path.into(), build_with_version);
             }
         }
 
         Ok(self.builds.get(path).map(|guard| guard.clone()).unwrap())
+    }
+
+    pub fn set_build(&self, source_uri: &Uri) -> anyhow::Result<BuildWithVersion> {
+        self.build(source_uri, None)
+    }
+
+    pub fn set_build_by_tree_shaking(
+        &self,
+        source_uri: &Uri,
+        include_pattern: &str,
+    ) -> anyhow::Result<BuildWithVersion> {
+        self.build(source_uri, Some(include_pattern))
     }
 
     pub fn get_build(&self, source_uri: &Uri) -> Option<Arc<Build>> {
