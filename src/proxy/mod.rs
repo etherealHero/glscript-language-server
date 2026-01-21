@@ -6,8 +6,12 @@ use async_lsp::lsp_types::{Url as Uri, request::Request};
 use async_lsp::router::Router;
 use async_lsp::{ClientSocket, ResponseError, ServerSocket};
 
-use crate::forward_layer::{ForwardingLayer, TService};
 use crate::state::State;
+use forward_layer::{ForwardingLayer, TService};
+
+mod forward_layer;
+mod language_client;
+mod language_server;
 
 pub const JS_LANG_ID: &str = "javascript";
 pub const JS_FILE_EXT: &str = ".js";
@@ -82,7 +86,7 @@ macro_rules! try_ensure_build {
         } else {
             let mut service = $self.server();
             return Box::pin(async move {
-                use $crate::language_server::Error;
+                use $crate::proxy::language_server::Error;
                 service.$method($params).await.map_err(Error::internal)
             });
         }
@@ -104,7 +108,7 @@ macro_rules! try_forward_text_document_position_params {
             *pos = build_pos;
             *uri = $build.uri.clone();
         } else {
-            use $crate::language_server::Error;
+            use $crate::proxy::language_server::Error;
             let err = format!("Forward src position `{pos:?}` failed");
             return Err(Error::request_failed(err));
         };

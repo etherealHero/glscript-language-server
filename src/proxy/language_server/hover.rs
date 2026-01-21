@@ -2,7 +2,7 @@ use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 use tokio::time::{Duration, timeout};
 
-use crate::language_server::{DefRes, Error, definition_params, forward_build_range};
+use crate::proxy::language_server::{DefRes, Error, definition_params, forward_build_range};
 use crate::proxy::{Canonicalize, DECL_FILE_EXT, Proxy, ResFut, ResReqProxy};
 use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 use crate::{try_ensure_build, try_forward_text_document_position_params};
@@ -50,23 +50,22 @@ pub fn proxy_hover_with_decl_info(
         }
 
         if let Ok(Some(DefRes::Link(ref l))) = decl {
-            let def_loc = l.first().unwrap();
-            if req_uri.try_canonicalize() == def_loc.target_uri.try_canonicalize() {
+            let res_uri = &l.first().unwrap().target_uri;
+            let path = state.uri_to_path(res_uri).unwrap();
+            let root = state.get_project();
+            let source = path.strip_prefix(root).unwrap_or(&path).display();
+
+            if req_uri.try_canonicalize() == res_uri.try_canonicalize() {
                 return Ok(Some(hover));
             }
 
-            if let Ok(path) = state.uri_to_path(&def_loc.target_uri) {
-                let root = state.get_project();
-                let source = path.strip_prefix(root).unwrap_or(&path).display();
-
-                hover = match path.to_str().unwrap().ends_with(DECL_FILE_EXT) {
-                    true => prepend_hover(hover, "Built-in symbol"),
-                    false => match state.get_default_sources().contains(&path) {
-                        true => prepend_hover(hover, &format!("**Default** included by {source}")),
-                        false => prepend_hover(hover, &format!("Included by {source}")),
-                    },
-                };
-            }
+            hover = match path.to_str().unwrap().ends_with(DECL_FILE_EXT) {
+                true => prepend_hover(hover, "Built-in symbol"),
+                false => match state.get_default_sources().contains(&path) {
+                    true => prepend_hover(hover, &format!("**Default** included by {source}")),
+                    false => prepend_hover(hover, &format!("Included by {source}")),
+                },
+            };
         }
 
         Ok(Some(hover))

@@ -1,68 +1,82 @@
-mod grammar {
-    use faster_pest::*;
+use tokens::{GlScriptSubsetGrammar, Rule};
+use tokens::{Pairs, PathLiteral, Pending, RawToken, Span};
 
-    #[derive(Parser)]
-    #[grammar = "src/glscript_subset_grammar.pest"]
-    pub struct GlScriptSubsetGrammar;
-}
+pub use tokens::{LineCol, Token};
 
-use derive_more::{Constructor, From};
-use grammar::{GlScriptSubsetGrammar, Ident, Rule};
+mod tokens;
 
-#[allow(unused)]
-type Pair<'a> = faster_pest::Pair2<'a, Ident<'a>>;
-type Pairs<'a> = faster_pest::Pairs2<'a, Ident<'a>>;
+pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
+    let raw_text_ptr = raw_text.as_ptr() as usize;
+    let pairs = get_pairs(raw_text);
+    let (mut line, mut offset, mut pending) = (0, 0, None::<Pending>);
+    let mut out = Vec::with_capacity(raw_text.lines().count());
 
-#[derive(Debug)]
-pub enum Token<'a> {
-    Include(Span),
-    IncludePath(PathLiteral<'a>),
-    RegionOpen(Span),
-    RegionClose(Span),
-    LineTerminator(LineCol),
-    Common(RawToken<'a>),
-    CommonWithLineEnding(RawToken<'a>),
-    Eoi(LineCol),
-}
+    for ref pair in pairs {
+        let (rule, pair_str) = (pair.as_rule(), pair.as_str());
+        let pair_len = pair_str.len() as u32;
+        let emit_span = || Span::new((line, offset).into(), pair_len);
+        let pos = unsafe { (pair_str.as_ptr() as usize).unchecked_sub(raw_text_ptr) };
+        let emit_token = || {
+            let text = unsafe { raw_text.get_unchecked(pos..pos + pair_len as usize) };
+            RawToken::new((line, offset).into(), text)
+        };
+        let emit_path_literal = || {
+            let path = unsafe { raw_text.get_unchecked(pos + 1..pos + pair_len as usize - 1) };
+            PathLiteral::new((line, offset).into(), path)
+        };
+        let uncommon_stmt = matches!(
+            rule,
+            Rule::IncludeToken | Rule::IncludePath | Rule::RegionOpen | Rule::RegionClose
+        );
 
-#[derive(Debug, Constructor)]
-pub struct RawToken<'a> {
-    pub line_col: LineCol,
-    pub text: &'a str,
-}
+        if uncommon_stmt && let Some(p) = pending.take() {
+            out.push(p.flush(raw_text));
+        }
 
-#[derive(Debug, Constructor)]
-pub struct PathLiteral<'a> {
-    pub line_col: LineCol,
-    pub path: &'a str,
-}
+        match rule {
+            Rule::LineTerminator | Rule::CommonWithLineEnding if pending.is_some() => {
+                if let Some(mut p) = pending.take() {
+                    p.has_linebreak = true;
+                    p.pending_len += pair_len;
+                    out.push(p.flush(raw_text));
+                }
+            }
+            Rule::LineTerminator => out.push(Token::LineTerminator((line, offset).into())),
+            Rule::CommonWithLineEnding => out.push(Token::CommonWithLineEnding(emit_token())),
+            Rule::IncludeToken => out.push(Token::Include(emit_span())),
+            Rule::IncludePath => out.push(Token::IncludePath(emit_path_literal())),
+            Rule::RegionOpen => out.push(Token::RegionOpen(emit_span())),
+            Rule::RegionClose => out.push(Token::RegionClose(emit_span())),
+            _ => match pending {
+                Some(ref mut acc) if acc.init_line_col.line == line => acc.pending_len += pair_len,
+                _ => pending = Pending::new((line, offset).into(), pos, pair_len, false).into(),
+            },
+        };
 
-#[derive(Debug, Constructor)]
-pub struct Span {
-    pub line_col: LineCol,
-    pub len: u32,
-}
+        match matches!(rule, Rule::LineTerminator | Rule::CommonWithLineEnding) {
+            true => (offset = 0, line += 1),
+            false => (offset += pair_str.chars().count() as u32, ()),
+        };
+    }
 
-#[derive(Debug, From)]
-pub struct LineCol {
-    pub line: u32,
-    pub col: u32,
-}
+    if let Some(p) = pending.take() {
+        out.push(p.flush(raw_text));
+    }
 
-#[derive(Constructor)]
-struct Pending {
-    init_line_col: LineCol,
-    init_pos: usize,
-    pending_len: u32,
-    has_linebreak: bool,
-}
+    let end_of_input: LineCol = match out.last() {
+        Some(Token::LineTerminator(r)) => (r.line + 1, 0).into(),
+        Some(Token::CommonWithLineEnding(r)) => (r.line_col.line + 1, 0).into(),
+        Some(Token::RegionClose(r)) => (r.line_col.line, r.line_col.col + r.len).into(),
+        Some(Token::Common(r)) => (r.line_col.line, r.line_col.col + r.text.len() as u32).into(),
+        Some(Token::IncludePath(r)) => {
+            (r.line_col.line, r.line_col.col + r.path.len() as u32 + 2).into()
+        }
+        None => (0, 0).into(),
+        _ => unreachable!(),
+    };
 
-fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> Pairs<'_> {
-    GlScriptSubsetGrammar::parse(entry_rule, raw_text)
-        .unwrap()
-        .next()
-        .unwrap()
-        .into_inner()
+    out.push(Token::Eoi(end_of_input));
+    out
 }
 
 fn get_pairs<'a>(raw_text: &'a str) -> Pairs<'a> {
@@ -87,89 +101,10 @@ fn get_pairs<'a>(raw_text: &'a str) -> Pairs<'a> {
     }
 }
 
-pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
-    let raw_text_ptr = raw_text.as_ptr() as usize;
-    let pairs = get_pairs(raw_text);
-    let (mut line, mut offset, mut pending) = (0, 0, None::<Pending>);
-    let mut out = Vec::with_capacity(raw_text.lines().count());
-    let mut pos;
-
-    let flush_pending_token = |p: Pending| {
-        let pending_range = p.init_pos..p.init_pos + p.pending_len as usize;
-        let text = unsafe { raw_text.get_unchecked(pending_range) };
-        let token = RawToken::new(p.init_line_col, text);
-        match p.has_linebreak {
-            true => Token::CommonWithLineEnding(token),
-            false => Token::Common(token),
-        }
-    };
-
-    for ref pair in pairs {
-        let (rule, pair_str) = (pair.as_rule(), pair.as_str());
-        let pair_len = pair_str.len() as u32;
-        let emit_span = || Span::new((line, offset).into(), pair_len);
-
-        pos = unsafe { (pair_str.as_ptr() as usize).unchecked_sub(raw_text_ptr) };
-
-        let emit_token = || {
-            let text = unsafe { raw_text.get_unchecked(pos..pos + pair_len as usize) };
-            RawToken::new((line, offset).into(), text)
-        };
-        let emit_path_literal = || {
-            let path = unsafe { raw_text.get_unchecked(pos + 1..pos + pair_len as usize - 1) };
-            PathLiteral::new((line, offset).into(), path)
-        };
-        let uncommon_stmt = matches!(
-            rule,
-            Rule::IncludeToken | Rule::IncludePath | Rule::RegionOpen | Rule::RegionClose
-        );
-
-        if uncommon_stmt && let Some(p) = pending.take() {
-            out.push(flush_pending_token(p));
-        }
-
-        match rule {
-            Rule::LineTerminator | Rule::CommonWithLineEnding if pending.is_some() => {
-                if let Some(mut p) = pending.take() {
-                    p.has_linebreak = true;
-                    p.pending_len += pair_len;
-                    out.push(flush_pending_token(p));
-                }
-            }
-            Rule::LineTerminator => out.push(Token::LineTerminator((line, offset).into())),
-            Rule::CommonWithLineEnding => out.push(Token::CommonWithLineEnding(emit_token())),
-            Rule::IncludeToken => out.push(Token::Include(emit_span())),
-            Rule::IncludePath => out.push(Token::IncludePath(emit_path_literal())),
-            Rule::RegionOpen => out.push(Token::RegionOpen(emit_span())),
-            Rule::RegionClose => out.push(Token::RegionClose(emit_span())),
-            _ => match pending {
-                Some(ref mut acc) if acc.init_line_col.line == line => acc.pending_len += pair_len,
-                _ => pending = Pending::new((line, offset).into(), pos, pair_len, false).into(),
-            },
-        };
-
-        match matches!(rule, Rule::LineTerminator | Rule::CommonWithLineEnding) {
-            true => (offset = 0, line += 1),
-            false => (offset += pair_str.chars().count() as u32, ()),
-        };
-    }
-
-    if let Some(p) = pending.take() {
-        out.push(flush_pending_token(p));
-    }
-
-    let end_of_input: LineCol = match out.last() {
-        Some(Token::LineTerminator(r)) => (r.line + 1, 0).into(),
-        Some(Token::CommonWithLineEnding(r)) => (r.line_col.line + 1, 0).into(),
-        Some(Token::RegionClose(r)) => (r.line_col.line, r.line_col.col + r.len).into(),
-        Some(Token::Common(r)) => (r.line_col.line, r.line_col.col + r.text.len() as u32).into(),
-        Some(Token::IncludePath(r)) => {
-            (r.line_col.line, r.line_col.col + r.path.len() as u32 + 2).into()
-        }
-        None => (0, 0).into(),
-        _ => unreachable!(),
-    };
-
-    out.push(Token::Eoi(end_of_input));
-    out
+fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> Pairs<'_> {
+    GlScriptSubsetGrammar::parse(entry_rule, raw_text)
+        .unwrap()
+        .next()
+        .unwrap()
+        .into_inner()
 }

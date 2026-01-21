@@ -2,7 +2,7 @@ use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, ResponseError, lsp_types as lsp};
 
 use crate::builder::BUILD_FILE_EXT;
-use crate::language_server::{DefRes, Error, forward_build_range};
+use crate::proxy::language_server::{DefRes, Error, forward_build_range};
 use crate::proxy::{Canonicalize, DECL_FILE_EXT, Proxy, ResFut};
 use crate::state::State;
 use crate::types::Source;

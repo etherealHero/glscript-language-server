@@ -2,8 +2,7 @@ use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::BUILD_FILE_EXT;
-use crate::language_server::NotifyResult;
-use crate::proxy::{JS_LANG_ID, Proxy, ResFut};
+use crate::proxy::{JS_LANG_ID, Proxy, ResFut, language_server::NotifyResult};
 use crate::try_ensure_build;
 
 pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) -> NotifyResult {

@@ -150,6 +150,7 @@ impl DocumentLinkStatement {
     }
 }
 
+// TODO: move to builder.rs
 pub struct SourceMapBuilder {
     pub tokens: Vec<sourcemap::RawToken>,
     sources: Vec<Arc<Source>>,

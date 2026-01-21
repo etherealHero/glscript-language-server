@@ -1,7 +1,7 @@
 use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
-use crate::language_server::{Error, NotifyResult};
+use crate::proxy::language_server::{Error, NotifyResult};
 use crate::proxy::{Proxy, ResFut};
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 

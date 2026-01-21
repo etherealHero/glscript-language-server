@@ -8,7 +8,7 @@ use async_lsp::{LanguageClient, LanguageServer, ResponseError, lsp_types as lsp}
 use tokio::time::{Duration, timeout};
 
 use crate::builder::Build;
-use crate::language_server::{DefRes, Error, definition_params, forward_build_range};
+use crate::proxy::language_server::{DefRes, Error, definition_params, forward_build_range};
 use crate::proxy::{Canonicalize, Proxy, ResFut};
 use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
 use crate::state::State;

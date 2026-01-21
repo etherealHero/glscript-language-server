@@ -1,9 +1,8 @@
 use async_lsp::lsp_types::{Url as Uri, request as R};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
-use crate::language_server::{Error, NotifyResult};
-use crate::proxy::PROXY_WORKSPACE;
-use crate::proxy::{Proxy, ResFut};
+use crate::proxy::language_server::{Error, NotifyResult};
+use crate::proxy::{PROXY_WORKSPACE, Proxy, ResFut};
 
 pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut<R::Initialize> {
     const JSCONFIG: &str = "jsconfig.json";

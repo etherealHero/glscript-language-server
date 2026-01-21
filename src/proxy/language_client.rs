@@ -1,8 +1,7 @@
 use async_lsp::lsp_types::{self as lsp, request as R};
 use async_lsp::{LanguageClient, ResponseError};
 
-use crate::language_server::Error;
-use crate::proxy::{Proxy, ResFut};
+use crate::proxy::{Proxy, ResFut, language_server::Error};
 
 impl LanguageClient for Proxy {
     type Error = ResponseError;
