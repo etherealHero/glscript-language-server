@@ -46,7 +46,7 @@ impl State {
     }
 
     pub fn get_build_by_emit_uri(&self, emit_uri: &Uri) -> Option<Arc<Build>> {
-        let emit_uri_canonicalized = emit_uri.canonicalize().unwrap_or_else(|_| emit_uri.clone());
+        let emit_uri_canonicalized = emit_uri.try_canonicalize();
         self.builds
             .iter()
             .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
@@ -59,6 +59,21 @@ impl State {
             .iter()
             .filter(|e| e.value().build.sources().contains(source))
             .map(|e| e.key().clone())
+            .collect()
+    }
+
+    pub fn get_default_sources(&self) -> Vec<PathBuf> {
+        let default_doc = self.get_default_doc();
+        let map = |s: &Source| {
+            let path = self.get_project().join(s.as_str());
+            let uri = self.path_to_uri(&path).unwrap();
+            self.uri_to_path(&uri).unwrap()
+        };
+        self.get_build(&default_doc)
+            .unwrap_or_else(|| self.set_build(&default_doc).unwrap().build)
+            .sources()
+            .iter()
+            .map(map)
             .collect()
     }
 }

@@ -3,7 +3,7 @@ use async_lsp::{LanguageServer, lsp_types as lsp};
 use tokio::time::{Duration, timeout};
 
 use crate::language_server::{DefRes, Error, definition_params, forward_build_range};
-use crate::proxy::{Proxy, ResFut, ResReqProxy};
+use crate::proxy::{Canonicalize, DECL_FILE_EXT, Proxy, ResFut, ResReqProxy};
 use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
@@ -20,6 +20,7 @@ pub fn proxy_hover_with_decl_info(
     let decl_req = this.definition(definition_params(uri.clone(), pos.to_owned()));
     let state = this.state.clone();
     let req_source = state.get_doc(uri).unwrap().source.clone();
+    let req_uri = uri.clone();
 
     Box::pin(async move {
         let doc_pos = &mut params.text_document_position_params;
@@ -43,13 +44,30 @@ pub fn proxy_hover_with_decl_info(
             .await
             .unwrap_or(Ok(None));
 
-        if matches!(decl, Ok(Some(DefRes::Link(l))) if l.is_empty()) {
+        if matches!(decl, Ok(Some(DefRes::Link(ref l))) if l.is_empty()) {
             let msg = "⚠ No definiion available for this item.";
             return Ok(Some(prepend_hover(hover, msg)));
         }
-        // else { // TODO: add
-        // 1) is symbol declared in DEFAULT_INCLUDED
-        // 2) view Source of decl module (if not current client buffer <- store current client buffer in State)
+
+        if let Ok(Some(DefRes::Link(ref l))) = decl {
+            let def_loc = l.first().unwrap();
+            if req_uri.try_canonicalize() == def_loc.target_uri.try_canonicalize() {
+                return Ok(Some(hover));
+            }
+
+            if let Ok(path) = state.uri_to_path(&def_loc.target_uri) {
+                let root = state.get_project();
+                let source = path.strip_prefix(root).unwrap_or(&path).display();
+
+                hover = match path.to_str().unwrap().ends_with(DECL_FILE_EXT) {
+                    true => prepend_hover(hover, "Built-in symbol"),
+                    false => match state.get_default_sources().contains(&path) {
+                        true => prepend_hover(hover, &format!("**Default** included by {source}")),
+                        false => prepend_hover(hover, &format!("Included by {source}")),
+                    },
+                };
+            }
+        }
 
         Ok(Some(hover))
     })

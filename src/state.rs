@@ -5,7 +5,7 @@ use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
 use dashmap::DashMap;
 
-use crate::proxy::{Canonicalize, PROXY_WORKSPACE};
+use crate::proxy::{Canonicalize, DEFAULT_SCRIPT_FILENAME, PROXY_WORKSPACE};
 use crate::types::BuildWithVersion;
 use crate::types::Document;
 
@@ -53,7 +53,7 @@ impl State {
 
     pub fn get_default_doc(&self) -> Uri {
         let path = self.project_path.get().unwrap();
-        let path = path.join(PROXY_WORKSPACE).join("DEFAULT_INCLUDED.js");
+        let path = path.join(PROXY_WORKSPACE).join(DEFAULT_SCRIPT_FILENAME);
         let default_doc = self.path_to_uri(&path);
         default_doc.unwrap_or(Uri::from_file_path(path).unwrap().canonicalize().unwrap())
     }

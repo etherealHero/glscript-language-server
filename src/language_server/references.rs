@@ -189,13 +189,7 @@ fn get_unopened_documents(
 
     let def_source = state.get_doc(&def_loc.target_uri).unwrap().source;
     let opened_builds_contains_source = state.get_builds_contains_source(&def_source); // TODO: if global context ?
-    let default_sources: Vec<_> = state
-        .get_build(&state.get_default_doc())
-        .unwrap_or_else(|| state.set_build(&state.get_default_doc()).unwrap().build) //
-        .sources()
-        .iter()
-        .map(|s| project.join(s.as_str()))
-        .collect();
+    let default_sources: Vec<_> = state.get_default_sources();
     tracing::info!("raw_entries scan...");
     let mut raw_entries = Vec::with_capacity(default_sources.len());
     for entry in Walk::new(project).flatten() {
@@ -288,10 +282,8 @@ async fn fetch_with_build_params(
         .map(Option::unwrap)
         .map(|mut r| {
             r.iter_mut().for_each(|l| {
-                let build_uri = || build.uri.canonicalize().unwrap_or(build.uri.clone());
-                let req_uri = temp.clone().unwrap_or_else(build_uri);
-                let loc_uri = l.uri.canonicalize().unwrap_or(l.uri.clone());
-                if req_uri == loc_uri
+                let req_uri = temp.clone().unwrap_or_else(|| build.uri.try_canonicalize());
+                if req_uri == l.uri.try_canonicalize()
                     && let Ok(source) = forward_build_range(&mut l.range, &build)
                 {
                     l.uri = state.path_to_uri(&project.join(source.as_str())).unwrap();

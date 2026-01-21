@@ -122,8 +122,7 @@ impl Hash for HashLocationLink {
         if let Some(origin_selection_range) = &self.0.origin_selection_range {
             origin_selection_range.hash(state);
         }
-        let uri = self.0.target_uri.canonicalize();
-        uri.unwrap_or(self.0.target_uri.clone()).hash(state);
+        self.0.target_uri.try_canonicalize().hash(state);
         self.0.target_range.hash(state);
         self.0.target_selection_range.hash(state);
     }
@@ -131,12 +130,9 @@ impl Hash for HashLocationLink {
 
 impl PartialEq for HashLocationLink {
     fn eq(&self, other: &Self) -> bool {
-        let target_canonicalize = self.0.target_uri.canonicalize();
-        let other_canonicalize = other.0.target_uri.canonicalize();
         self.0.origin_selection_range == other.0.origin_selection_range
             && self.0.target_selection_range == other.0.target_selection_range
             && self.0.target_range == other.0.target_range
-            && target_canonicalize.unwrap_or(self.0.target_uri.clone())
-                == other_canonicalize.unwrap_or(other.0.target_uri.clone())
+            && self.0.target_uri.try_canonicalize() == other.0.target_uri.try_canonicalize()
     }
 }

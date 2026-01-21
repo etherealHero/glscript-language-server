@@ -13,6 +13,7 @@ pub const JS_LANG_ID: &str = "javascript";
 pub const JS_FILE_EXT: &str = ".js";
 pub const DECL_FILE_EXT: &str = ".d.ts";
 pub const PROXY_WORKSPACE: &str = "./.local/gls-proxy-workspace";
+pub const DEFAULT_SCRIPT_FILENAME: &str = "DEFAULT_INCLUDED.js";
 pub const DEFAULT_TIMEOUT_MS: u64 = 5000;
 
 pub type ResFut<R> = BoxFuture<'static, Result<<R as Request>::Result, ResponseError>>;
@@ -22,6 +23,8 @@ pub trait Canonicalize {
     fn canonicalize(&self) -> anyhow::Result<Self>
     where
         Self: std::marker::Sized;
+
+    fn try_canonicalize(&self) -> Self;
 }
 
 impl Canonicalize for Uri {
@@ -29,6 +32,10 @@ impl Canonicalize for Uri {
         let msg = "uri canonicalize failed";
         let path = self.to_file_path().map_err(|_| anyhow::Error::msg(msg))?;
         Uri::from_file_path(path).map_err(|_| anyhow::Error::msg(msg))
+    }
+
+    fn try_canonicalize(&self) -> Self {
+        self.canonicalize().unwrap_or_else(|_| self.to_owned())
     }
 }
 
