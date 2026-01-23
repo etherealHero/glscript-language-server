@@ -12,6 +12,7 @@ use crate::proxy::language_server::{DefRes, Error, definition_params, forward_bu
 use crate::proxy::{Canonicalize, Proxy, ResFut};
 use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
 use crate::state::State;
+use crate::types::{IncludePattern, SourceHash};
 use crate::{try_ensure_build, try_forward_text_document_position_params};
 
 const TEMPORARY_SCRIPT: &str = "file:///.virtual/refs.js";
@@ -199,12 +200,13 @@ fn get_unopened_documents(
     }
     tracing::info!("raw_entries scanned; repository indexing...");
     let (js, decl) = (&JS_FILE_EXT[1..], &DECL_FILE_EXT[1..]);
-    let def_lit = get_definition_literal(def_loc, state);
+    let (def_lit, source_hash) = get_definition_pattern(def_loc, state);
     let matched_docs: Vec<Uri> = raw_entries
         .par_iter()
         .filter_map(|p| {
+            let pat = IncludePattern::new(&def_lit, source_hash);
             let uri = state.path_to_uri(p.as_path()).ok();
-            if uri.is_none() && !p.extension().is_some_and(|ext| ext == js || ext == decl) {
+            if uri.is_none() || !p.extension().is_some_and(|ext| ext == js || ext == decl) {
                 return None;
             }
             let matched = match uri.as_ref().and_then(|u| state.get_doc(u).ok()) {
@@ -218,7 +220,10 @@ fn get_unopened_documents(
                 return None;
             }
 
-            let _ = state.set_build_by_tree_shaking(uri.as_ref().unwrap(), &def_lit);
+            state
+                .set_build_by_tree_shaking(uri.as_ref().unwrap(), pat)
+                .ok()?;
+
             uri
         })
         .collect();
@@ -239,13 +244,14 @@ fn get_unopened_documents(
         .collect()
 }
 
-fn get_definition_literal(def_loc: &lsp::LocationLink, state: &Arc<State>) -> String {
+fn get_definition_pattern(def_loc: &lsp::LocationLink, state: &Arc<State>) -> (String, SourceHash) {
     let def_doc = state.get_doc(&def_loc.target_uri).unwrap();
     let s = def_loc.target_selection_range.start;
     let start_pos = def_doc.buffer.line_to_char(s.line as usize) + s.character as usize;
     let e = def_loc.target_selection_range.end;
     let end_pos = def_doc.buffer.line_to_char(e.line as usize) + e.character as usize;
-    def_doc.buffer.slice(start_pos..end_pos).to_string()
+    let lit = def_doc.buffer.slice(start_pos..end_pos).to_string();
+    (lit, def_doc.source_hash)
 }
 
 async fn get_definition_location(

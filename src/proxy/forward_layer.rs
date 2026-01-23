@@ -81,7 +81,7 @@ where
                 Poll::Ready(Ok(serde_json::Value::Null))
             }
             Poll::Ready(Err(fail_req)) => {
-                dbg!((this.method, &fail_req));
+                tracing::error!("{}: {}", this.method, &fail_req);
                 Poll::Ready(Err(fail_req))
             }
             Poll::Pending => Poll::Pending,

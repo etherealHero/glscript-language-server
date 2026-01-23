@@ -100,7 +100,7 @@ impl State {
         }
 
         let content = &[lsp::TextDocumentContentChangeEvent {
-            text: std::fs::read_to_string(path)?,
+            text: std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned())?,
             range_length: None,
             range: None,
         }];

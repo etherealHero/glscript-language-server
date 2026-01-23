@@ -6,11 +6,15 @@ use async_lsp::lsp_types::Url as Uri;
 use crate::builder::Build;
 use crate::proxy::Canonicalize;
 use crate::state::State;
-use crate::types::{BuildWithVersion, Source};
+use crate::types::{BuildWithVersion, IncludePattern, Source};
 
 /// State of builds
 impl State {
-    fn build(&self, source_uri: &Uri, pat: Option<&str>) -> anyhow::Result<BuildWithVersion> {
+    fn build(
+        &self,
+        source_uri: &Uri,
+        pat: Option<IncludePattern>,
+    ) -> anyhow::Result<BuildWithVersion> {
         let path = &self.uri_to_path(source_uri)?;
 
         match self.builds.get_mut(path) {
@@ -36,7 +40,7 @@ impl State {
     pub fn set_build_by_tree_shaking(
         &self,
         source_uri: &Uri,
-        include_pattern: &str,
+        include_pattern: IncludePattern,
     ) -> anyhow::Result<BuildWithVersion> {
         self.build(source_uri, Some(include_pattern))
     }

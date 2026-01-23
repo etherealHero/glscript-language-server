@@ -83,8 +83,14 @@ pub struct SourceHash(u64);
 
 impl SourceHash {
     pub fn new(source: &Source) -> Self {
-        Self(fxhash::hash64(&**source))
+        Self(fxhash::hash64(source.as_str()))
     }
+}
+
+#[derive(Constructor, Clone)]
+pub struct IncludePattern<'a> {
+    pub lit: &'a str,
+    pub source: SourceHash,
 }
 
 /// compatibility ECMAScript identifier hash from [`Source`]

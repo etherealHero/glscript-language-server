@@ -5,7 +5,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use crate::parser::{LineCol, Token};
 use crate::state::State;
-use crate::types::{DocumentLinkStatement, Source, SourceHash, SourceMapBuilder};
+use crate::types::{DocumentLinkStatement, IncludePattern, Source, SourceHash, SourceMapBuilder};
 
 pub const BUILD_FILE_EXT: &str = ".emitted";
 
@@ -106,23 +106,33 @@ impl Build {
         st: &State,
         uri: &Uri,
         pb: Option<Arc<Self>>,
-        pat: Option<&str>,
+        pat: Option<IncludePattern>,
     ) -> anyhow::Result<Self> {
-        if pat.is_none() {
-            return Build::new(st, uri, pb, None, None).map(|s| s.0);
+        match pat {
+            None => Build::new(st, uri, pb, None, None).map(|s| s.0),
+            Some(pat) => {
+                let (_, pat_sources) = Build::new(st, uri, pb.clone(), Some(pat.clone()), None)?;
+
+                if !pat_sources.as_ref().unwrap().contains(&pat.source) {
+                    let msg = "build does not contain desired include pattern";
+                    return Err(anyhow::Error::msg(msg));
+                }
+
+                let (build_with_tree_shaking, _) = Build::new(st, uri, pb, None, pat_sources)?;
+                let sources = &build_with_tree_shaking.sources();
+
+                debug_assert!(sources.iter().any(|s| SourceHash::new(s) == pat.source));
+
+                Ok(build_with_tree_shaking)
+            }
         }
-
-        let (_, pat_sources) = Build::new(st, uri, pb.clone(), pat, None)?;
-        let (build_with_tree_shaking, _) = Build::new(st, uri, pb, None, pat_sources)?;
-
-        Ok(build_with_tree_shaking)
     }
 
     fn new(
         state: &State,
         uri: &Uri,
         prev_build: Option<Arc<Self>>,
-        include_pattern: Option<&str>,
+        include_pattern: Option<IncludePattern>,
         include_sources: Option<IncludePatternSources>,
     ) -> anyhow::Result<(Self, Option<IncludePatternSources>)> {
         let doc = state.get_doc(uri)?;
@@ -147,7 +157,8 @@ impl Build {
         let new_ctx = || {
             let visited = HashSet::<SourceHash>::with_capacity(sources_cap);
             let sources = include_sources.clone();
-            Context::new(state, default_doc, visited, include_pattern, sources)
+            let pat = include_pattern.clone();
+            Context::new(state, default_doc, visited, pat, sources, false)
         };
 
         {
@@ -167,7 +178,7 @@ impl Build {
             }
         };
         let content_task = || {
-            let include_pat_sources = include_pattern.map(|_| HashSet::default());
+            let include_pat_sources = include_pattern.as_ref().map(|_| HashSet::default());
             let mut st = Emit::WithDstContent(initial_buf, include_pat_sources);
             Emit::content(&mut st, &mut new_ctx(), uri);
             match st.finish(state) {
@@ -219,8 +230,9 @@ struct Context<'a> {
     proxy_state: &'a State,
     defult_document: &'a Uri,
     visited_sources: HashSet<SourceHash>,
-    include_pattern: Option<&'a str>,
+    include_pattern: Option<IncludePattern<'a>>,
     include_sources: Option<IncludePatternSources>,
+    is_default_context: bool,
 }
 
 enum Emit {
@@ -425,7 +437,11 @@ impl Emit {
     }
 }
 
-type IncludePatternMatched = Option<bool>;
+#[derive(Default)]
+struct IncludePatternMatched {
+    literal: bool,
+    source: bool,
+}
 
 /// Destination content
 impl Emit {
@@ -450,20 +466,36 @@ impl Emit {
         }
     }
 
-    fn traverse_common(&mut self, ctx: &mut Context<'_>, matched: &mut Option<bool>, t: &str) {
-        let check = |_| t.contains(ctx.include_pattern.unwrap());
-        if matched.map(check).is_some_and(|matched| matched) {
-            *matched = Some(true)
+    fn traverse_common(
+        &mut self,
+        ctx: &mut Context<'_>,
+        matched: &mut Option<IncludePatternMatched>,
+        t: &str,
+    ) {
+        let check = |_| t.contains(ctx.include_pattern.as_ref().unwrap().lit);
+        if matched.as_ref().map(check).is_some_and(|matched| matched) {
+            let is_source_traversed = matched.as_ref().unwrap().source;
+            *matched = Some(IncludePatternMatched {
+                literal: true,
+                source: is_source_traversed,
+            });
         }
         self.push_str(t)
     }
 
-    fn content(st: &mut Emit, ctx: &mut Context, target: &Uri) -> IncludePatternMatched {
-        let mut matched = ctx.include_pattern.map(|_| false);
+    fn content(st: &mut Emit, ctx: &mut Context, target: &Uri) -> Option<IncludePatternMatched> {
+        if target == ctx.defult_document {
+            ctx.is_default_context = true;
+        }
+
         let d = match ctx.proxy_state.get_doc(target) {
             Ok(doc) => doc,
             Err(_) => return None,
         };
+        let mut matched = ctx.include_pattern.as_ref().map(|p| IncludePatternMatched {
+            source: p.source == d.source_hash,
+            literal: p.source == d.source_hash,
+        });
         let (path, tokens, decl_stmt) = (&d.path, d.tokens.iter(), &d.decl_stmt);
 
         match ctx.visited_sources.contains(&d.source_hash) {
@@ -477,7 +509,13 @@ impl Emit {
             return None;
         }
 
-        Emit::content(st, ctx, ctx.defult_document);
+        if let Some(dep_match) = Emit::content(st, ctx, ctx.defult_document) {
+            let current_matched = matched.as_ref().unwrap();
+            matched = Some(IncludePatternMatched {
+                literal: current_matched.literal || dep_match.literal,
+                source: current_matched.source || dep_match.source,
+            });
+        }
         st.push_str(decl_stmt);
 
         let mut lt_ro_skip = false;
@@ -489,9 +527,14 @@ impl Emit {
                     if let Ok(dep_uri) = ctx.proxy_state.path_to_uri(&dep_path) {
                         if let Ok(dep_doc) = ctx.proxy_state.get_doc(&dep_uri) {
                             st.push_str(&dep_doc.link_stmt);
-                            if matches!(Emit::content(st, ctx, &dep_uri), Some(true)) {
-                                matched = Some(true)
-                            };
+
+                            if let Some(dep_match) = Emit::content(st, ctx, &dep_uri) {
+                                let current_matched = matched.as_ref().unwrap();
+                                matched = Some(IncludePatternMatched {
+                                    literal: current_matched.literal || dep_match.literal,
+                                    source: current_matched.source || dep_match.source,
+                                });
+                            }
                         } else {
                             st.push_str(&DocumentLinkStatement::undefined())
                         };
@@ -522,8 +565,16 @@ impl Emit {
             }
         }
 
-        if matches!(matched, Some(true)) {
+        if ctx.is_default_context {
+            if matches!(matched.as_ref().map(|m| m.literal && m.source), Some(true)) {
+                st.push_include_pattern_source(d.source_hash);
+            }
+        } else if matches!(matched.as_ref().map(|m| m.literal), Some(true)) {
             st.push_include_pattern_source(d.source_hash);
+        }
+
+        if target == ctx.defult_document {
+            ctx.is_default_context = false;
         }
 
         matched
