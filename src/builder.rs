@@ -246,12 +246,6 @@ enum EmitResult {
 }
 
 impl Emit {
-    #[allow(unused)]
-    #[tracing::instrument(skip_all)]
-    fn prepare_par_iter_wrapper(st: &mut Emit, ctx: &mut Context, target: &Uri) {
-        Emit::prepare_par_iter(st, ctx, target);
-    }
-
     fn prepare_par_iter(st: &mut Emit, ctx: &mut Context, target: &Uri) {
         let d = match ctx.proxy_state.get_doc(target) {
             Ok(doc) => doc,

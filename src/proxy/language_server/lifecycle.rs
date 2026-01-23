@@ -1,4 +1,4 @@
-use async_lsp::lsp_types::{Url as Uri, request as R};
+use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::proxy::language_server::{Error, NotifyResult};
@@ -41,7 +41,7 @@ pub fn initialized(this: &mut Proxy, params: lsp::InitializedParams) -> NotifyRe
     std::ops::ControlFlow::Continue(())
 }
 
-pub fn shutdown(this: &mut Proxy) -> ResFut<R::Shutdown> {
+pub fn shutdown(this: &mut Proxy, (): <R::Shutdown as R::Request>::Params) -> ResFut<R::Shutdown> {
     let mut service = this.server();
     Box::pin(async move {
         let _ = service.shutdown(()).await;
@@ -49,7 +49,7 @@ pub fn shutdown(this: &mut Proxy) -> ResFut<R::Shutdown> {
     })
 }
 
-pub fn exit(this: &mut Proxy) -> NotifyResult {
+pub fn exit(this: &mut Proxy, (): <N::Exit as N::Notification>::Params) -> NotifyResult {
     let _ = this.server().exit(());
     std::ops::ControlFlow::Break(Ok(()))
 }

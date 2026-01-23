@@ -54,15 +54,6 @@ pub fn proxy_workspace_references(
         let opened_builds_contains_source = st.get_builds_contains_source(&def_source); // TODO: if global context ?
         let unopened_docs = get_unopened_documents(&st, &root, &def_loc);
 
-        // TODO:
-        // 1 DEPENDECY tree shaking (via strip common dependencies by def_literal pattern)
-        //  1.1 disable tree shaking if def_pos in d.ts
-        // impl:
-        //  - save tree shaked build in temporary file (!migrate to temporary file)
-        //  OR - skip emit if EmitCallback not matched def_literal in there recursive call result
-        //     - patch first traverse with pattern matching tree
-        //       ,then add second traverse (united SM & content) with exclude non matching dependencies
-        //  - impl traverse emit fn without separate sourcemaps & content ctx (inspire by single loop)
         for (i, doc_uri) in unopened_docs.iter().enumerate() {
             let try_open = |s: &mut async_lsp::ServerSocket| {
                 let build = st.get_build(doc_uri).unwrap();

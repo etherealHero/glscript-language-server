@@ -6,6 +6,7 @@ use async_lsp::lsp_types::{Url as Uri, request::Request};
 use async_lsp::router::Router;
 use async_lsp::{ClientSocket, ResponseError, ServerSocket};
 
+use crate::proxy::language_server::init_language_server_router;
 use crate::state::State;
 use forward_layer::{ForwardingLayer, TService};
 
@@ -64,7 +65,7 @@ impl Proxy {
         client: std::sync::Arc<std::sync::OnceLock<ClientSocket>>,
     ) -> (impl TService<Future: Send>, impl TService<Future: Send>) {
         let proxy = Self::new(client, server, std::sync::Arc::new(State::default()));
-        let sr = Router::from_language_server(proxy.clone());
+        let sr = init_language_server_router(proxy.clone());
         let cr = Router::from_language_client(proxy);
         let server = ServiceBuilder::new().layer(ForwardingLayer).service(sr);
         let client = ServiceBuilder::new().layer(ForwardingLayer).service(cr);

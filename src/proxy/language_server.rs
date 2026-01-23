@@ -1,5 +1,5 @@
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
-use async_lsp::lsp_types::{notification::Notification, request::Request};
+use async_lsp::router::Router;
 use async_lsp::{ErrorCode, LanguageServer, ResponseError, lsp_types as lsp};
 
 use crate::builder::Build;
@@ -9,13 +9,11 @@ use crate::types::Source;
 mod common_features;
 mod completion;
 mod definition;
-mod document_synchronization;
+mod doc_sync;
 mod hover;
 mod lifecycle;
 mod references;
 
-type FutResCompletionItem = ResFut<R::ResolveCompletionItem>;
-type ChangeWatchedParams = lsp::DidChangeWatchedFilesParams;
 pub type NotifyResult = std::ops::ControlFlow<async_lsp::Result<()>>;
 pub type DefRes = lsp::GotoDefinitionResponse;
 
@@ -59,81 +57,41 @@ pub fn definition_params(uri: Uri, pos: lsp::Position) -> lsp::GotoDefinitionPar
     }
 }
 
+pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
+    let mut router: Router<Proxy> = Router::new(proxy);
+    router
+        .request::<R::Initialize, _>(lifecycle::initialize)
+        .notification::<N::Initialized>(lifecycle::initialized)
+        .request::<R::Shutdown, _>(lifecycle::shutdown)
+        .notification::<N::Exit>(lifecycle::exit)
+        .notification::<N::DidOpenTextDocument>(doc_sync::proxy_did_open)
+        .notification::<N::DidChangeTextDocument>(doc_sync::proxy_did_change)
+        .notification::<N::DidSaveTextDocument>(doc_sync::proxy_did_save)
+        .notification::<N::DidCloseTextDocument>(doc_sync::proxy_did_close)
+        .notification::<N::DidChangeWatchedFiles>(doc_sync::proxy_did_change_watched_files)
+        .request::<R::CodeLensRequest, _>(doc_sync::proxy_sync_doc_by_code_lens_request)
+        .request::<R::SignatureHelpRequest, _>(common_features::proxy_signature_help)
+        .notification::<N::Cancel>(common_features::proxy_cancel_request)
+        .request::<R::HoverRequest, _>(hover::proxy_hover_with_decl_info)
+        .request::<R::GotoDefinition, _>(definition::proxy_definition)
+        .request::<R::Completion, _>(completion::proxy_completion)
+        .request::<R::ResolveCompletionItem, _>(completion::proxy_completion_item_resolve)
+        .request::<R::References, _>(Proxy::references);
+    router
+}
+
 #[allow(clippy::redundant_async_block)]
 impl LanguageServer for Proxy {
     type Error = ResponseError;
     type NotifyResult = std::ops::ControlFlow<async_lsp::Result<()>>;
 
-    fn initialize(&mut self, params: lsp::InitializeParams) -> ResFut<R::Initialize> {
-        let req = lifecycle::initialize(self, params);
-        Box::pin(async move { req.await })
-    }
-
-    fn initialized(&mut self, params: lsp::InitializedParams) -> NotifyResult {
-        lifecycle::initialized(self, params)
-    }
-
-    fn shutdown(&mut self, (): <R::Shutdown as Request>::Params) -> ResFut<R::Shutdown> {
-        lifecycle::shutdown(self)
-    }
-
-    fn exit(&mut self, (): <N::Exit as Notification>::Params) -> NotifyResult {
-        lifecycle::exit(self)
-    }
-
-    fn did_open(&mut self, params: lsp::DidOpenTextDocumentParams) -> NotifyResult {
-        document_synchronization::proxy_did_open(self, params)
-    }
-
-    #[tracing::instrument(skip_all)]
-    fn did_change(&mut self, params: lsp::DidChangeTextDocumentParams) -> NotifyResult {
-        document_synchronization::proxy_did_change(self, params)
-    }
-
-    fn did_save(&mut self, params: lsp::DidSaveTextDocumentParams) -> NotifyResult {
-        document_synchronization::proxy_did_save(self, params)
-    }
-
-    fn did_close(&mut self, params: lsp::DidCloseTextDocumentParams) -> NotifyResult {
-        document_synchronization::proxy_did_close(self, params)
-    }
-
-    fn did_change_watched_files(&mut self, p: ChangeWatchedParams) -> NotifyResult {
-        document_synchronization::proxy_did_change_watched_files(self, p)
-    }
-
-    fn code_lens(&mut self, params: lsp::CodeLensParams) -> ResFut<R::CodeLensRequest> {
-        let req = document_synchronization::proxy_sync_doc_by_code_lens_request(self, params);
-        Box::pin(async move { req.await })
-    }
-
-    fn signature_help(&mut self, p: lsp::SignatureHelpParams) -> ResFut<R::SignatureHelpRequest> {
-        let req = common_features::proxy_signature_help(self, p);
-        Box::pin(async move { req.await })
-    }
-
-    fn cancel_request(&mut self, _: lsp::CancelParams) -> NotifyResult {
-        common_features::proxy_cancel_request(self)
-    }
-
-    fn hover(&mut self, params: lsp::HoverParams) -> ResFut<R::HoverRequest> {
-        let req = hover::proxy_hover_with_decl_info(self, params);
-        Box::pin(async move { req.await })
+    fn initialize(&mut self, _: lsp::InitializeParams) -> ResFut<R::Initialize> {
+        unreachable!()
     }
 
     #[tracing::instrument(skip_all)]
     fn definition(&mut self, params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
         let req = definition::proxy_definition(self, params);
-        Box::pin(async move { req.await })
-    }
-
-    fn completion(&mut self, params: lsp::CompletionParams) -> ResFut<R::Completion> {
-        let req = completion::proxy_completion(self, params);
-        Box::pin(async move { req.await })
-    }
-
-    fn completion_item_resolve(&mut self, p: lsp::CompletionItem) -> FutResCompletionItem {
-        let req = completion::proxy_completion_item_resolve(self, p);
         Box::pin(async move { req.await })
     }
 

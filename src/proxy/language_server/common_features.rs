@@ -20,7 +20,7 @@ pub fn proxy_signature_help(
     })
 }
 
-pub fn proxy_cancel_request(this: &mut Proxy) -> NotifyResult {
+pub fn proxy_cancel_request(this: &mut Proxy, _: lsp::CancelParams) -> NotifyResult {
     this.state.cancel_received.store(true);
     std::ops::ControlFlow::Continue(())
 }
