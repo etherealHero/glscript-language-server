@@ -57,6 +57,20 @@ pub fn definition_params(uri: Uri, pos: lsp::Position) -> lsp::GotoDefinitionPar
     }
 }
 
+pub fn references_params(uri: Uri, pos: lsp::Position) -> lsp::ReferenceParams {
+    lsp::ReferenceParams {
+        text_document_position: lsp::TextDocumentPositionParams::new(
+            lsp::TextDocumentIdentifier::new(uri),
+            pos,
+        ),
+        work_done_progress_params: lsp::WorkDoneProgressParams::default(),
+        partial_result_params: lsp::PartialResultParams::default(),
+        context: lsp::ReferenceContext {
+            include_declaration: true, // the client sends two requests and the second request with false obscures the first response
+        },
+    }
+}
+
 pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
     let mut router: Router<Proxy> = Router::new(proxy);
     router
@@ -76,7 +90,9 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::GotoDefinition, _>(definition::proxy_definition)
         .request::<R::Completion, _>(completion::proxy_completion)
         .request::<R::ResolveCompletionItem, _>(completion::proxy_completion_item_resolve)
-        .request::<R::References, _>(Proxy::references);
+        .request::<R::References, _>(Proxy::references)
+        .request::<R::PrepareRenameRequest, _>(common_features::proxy_prepare_rename)
+        .request::<R::Rename, _>(common_features::proxy_rename);
     router
 }
 

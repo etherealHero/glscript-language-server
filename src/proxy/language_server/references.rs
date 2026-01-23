@@ -8,7 +8,9 @@ use async_lsp::{LanguageClient, LanguageServer, ResponseError, lsp_types as lsp}
 use tokio::time::{Duration, timeout};
 
 use crate::builder::Build;
-use crate::proxy::language_server::{DefRes, Error, definition_params, forward_build_range};
+use crate::proxy::language_server::{
+    DefRes, Error, definition_params, forward_build_range, references_params,
+};
 use crate::proxy::{Canonicalize, Proxy, ResFut};
 use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
 use crate::state::State;
@@ -143,18 +145,7 @@ async fn traverse(
     };
 
     let req_uri = temp.clone().unwrap_or_else(|| build.uri.clone());
-    let fwd_params = lsp::ReferenceParams {
-        text_document_position: lsp::TextDocumentPositionParams::new(
-            lsp::TextDocumentIdentifier::new(req_uri),
-            position,
-        ),
-        work_done_progress_params: lsp::WorkDoneProgressParams::default(),
-        partial_result_params: lsp::PartialResultParams::default(),
-        context: lsp::ReferenceContext {
-            include_declaration: true, // the client sends two requests and the second request with false obscures the first response
-        },
-    };
-
+    let fwd_params = references_params(req_uri, position);
     let fetch_response = timeout(
         Duration::from_millis(DEFAULT_TIMEOUT_MS),
         fetch_with_build_params(service, st, root, fwd_params, build, temp),

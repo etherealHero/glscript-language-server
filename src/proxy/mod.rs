@@ -85,6 +85,7 @@ macro_rules! try_ensure_build {
             $self.state.commit_build_changes($uri, &mut $self.server());
             build
         } else {
+            tracing::warn!("build not found, fallback request...");
             let mut service = $self.server();
             return Box::pin(async move {
                 use $crate::proxy::language_server::Error;

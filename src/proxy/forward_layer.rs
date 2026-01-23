@@ -73,15 +73,15 @@ where
         let this = self.project();
         match this.fut.poll(cx) {
             Poll::Ready(Ok(result_req)) => {
-                // dbg!((this.method, &result_req));
+                // tracing::info!((this.method, &result_req));
                 Poll::Ready(Ok(result_req))
             }
             Poll::Ready(Err(unimpl_req)) if unimpl_req.code == ErrorCode::METHOD_NOT_FOUND => {
-                // dbg!((this.method, unimpl_req));
+                tracing::warn!("unimplemented request {}", this.method);
                 Poll::Ready(Ok(serde_json::Value::Null))
             }
             Poll::Ready(Err(fail_req)) => {
-                tracing::error!("{}: {}", this.method, &fail_req);
+                tracing::error!("failed request {}: {}", this.method, &fail_req);
                 Poll::Ready(Err(fail_req))
             }
             Poll::Pending => Poll::Pending,
@@ -91,11 +91,11 @@ where
 
 impl<S: TService<Future: Send> + 'static> LspService for ForwardingMiddleware<S> {
     fn notify(&mut self, notif: AnyNotification) -> ControlFlow<async_lsp::Result<()>> {
-        let _unimpl_notify = notif.method.clone();
+        let unimpl_notify = notif.method.clone();
         let result = self.inner.notify(notif);
         match &result {
             ControlFlow::Break(Err(async_lsp::Error::Routing(_))) => {
-                // dbg!(_unimpl_notify);
+                tracing::warn!("unimplemented notify {}", unimpl_notify);
                 ControlFlow::Continue(())
             }
             ControlFlow::Break(_) | ControlFlow::Continue(_) => result,
