@@ -3,38 +3,32 @@ use std::sync::Arc;
 
 use async_lsp::lsp_types::Url as Uri;
 
-use crate::builder::Build;
+use crate::builder::{Build, BuildOptionsBuilder};
 use crate::proxy::Canonicalize;
 use crate::state::State;
 use crate::types::{BuildWithVersion, IncludePattern, Source};
 
 /// State of builds
 impl State {
-    fn build(
-        &self,
-        source_uri: &Uri,
-        pat: Option<IncludePattern>,
-    ) -> anyhow::Result<BuildWithVersion> {
-        let path = &self.uri_to_path(source_uri)?;
-
+    fn build(&self, opt: BuildOptionsBuilder) -> anyhow::Result<BuildWithVersion> {
+        let path = &self.uri_to_path(opt.target())?;
         match self.builds.get_mut(path) {
             Some(mut b) => {
-                let new_build = Build::create(self, source_uri, Some(b.build.clone()), pat)?;
+                let new_build = Build::create(opt.with_previous_build(b.build.clone()))?;
                 b.build = new_build.into();
                 b.version += 1;
             }
             None => {
-                let new_build = Build::create(self, source_uri, None, pat)?;
+                let new_build = Build::create(opt)?;
                 let build_with_version = BuildWithVersion::new(new_build.into(), 1);
                 self.builds.insert(path.into(), build_with_version);
             }
         }
-
         Ok(self.builds.get(path).map(|guard| guard.clone()).unwrap())
     }
 
     pub fn set_build(&self, source_uri: &Uri) -> anyhow::Result<BuildWithVersion> {
-        self.build(source_uri, None)
+        self.build(BuildOptionsBuilder::init(source_uri, self))
     }
 
     pub fn set_build_by_tree_shaking(
@@ -42,7 +36,8 @@ impl State {
         source_uri: &Uri,
         include_pattern: IncludePattern,
     ) -> anyhow::Result<BuildWithVersion> {
-        self.build(source_uri, Some(include_pattern))
+        let opt = BuildOptionsBuilder::init(source_uri, self);
+        self.build(opt.with_include_pattern(include_pattern))
     }
 
     pub fn get_build(&self, source_uri: &Uri) -> Option<Arc<Build>> {

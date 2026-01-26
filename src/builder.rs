@@ -9,7 +9,7 @@ use crate::types::{DocumentLinkStatement, IncludePattern, Source, SourceHash, So
 
 pub const BUILD_FILE_EXT: &str = ".emitted";
 
-#[derive(Debug)]
+#[derive(Debug, Constructor)]
 pub struct Build {
     pub content: String,
     pub uri: Uri,
@@ -100,44 +100,69 @@ impl Build {
 
 type IncludePatternSources = HashSet<SourceHash>;
 
-impl Build {
-    // #[tracing::instrument(skip_all, fields( doc = uri.as_str().split("/").last().unwrap() ))]
-    pub fn create(
-        st: &State,
-        uri: &Uri,
-        pb: Option<Arc<Self>>,
-        pat: Option<IncludePattern>,
-    ) -> anyhow::Result<Self> {
-        match pat {
-            None => Build::new(st, uri, pb, None, None).map(|s| s.0),
-            Some(pat) => {
-                let (_, pat_sources) = Build::new(st, uri, pb.clone(), Some(pat.clone()), None)?;
+#[derive(Constructor)]
+pub struct BuildOptionsBuilder<'a> {
+    options: BuildOptions<'a>,
+}
 
-                if !pat_sources.as_ref().unwrap().contains(&pat.source) {
-                    let msg = "build does not contain desired include pattern";
-                    return Err(anyhow::Error::msg(msg));
-                }
-
-                let (build_with_tree_shaking, _) = Build::new(st, uri, pb, None, pat_sources)?;
-                let sources = &build_with_tree_shaking.sources();
-
-                debug_assert!(sources.iter().any(|s| SourceHash::new(s) == pat.source));
-
-                Ok(build_with_tree_shaking)
-            }
-        }
+impl<'a> BuildOptionsBuilder<'a> {
+    pub fn init(uri: &'a Uri, st: &'a State) -> Self {
+        Self::new(BuildOptions::new(st, uri, None, None, None))
     }
 
-    fn new(
-        state: &State,
-        uri: &Uri,
-        prev_build: Option<Arc<Self>>,
-        include_pattern: Option<IncludePattern>,
-        include_sources: Option<IncludePatternSources>,
-    ) -> anyhow::Result<(Self, Option<IncludePatternSources>)> {
-        let doc = state.get_doc(uri)?;
+    pub fn with_previous_build(mut self, pb: Arc<Build>) -> Self {
+        self.options.pb = Some(pb);
+        self
+    }
+
+    pub fn with_include_pattern(mut self, pat: IncludePattern<'a>) -> Self {
+        self.options.pat = Some(pat);
+        self
+    }
+
+    pub fn target(&self) -> &'a Uri {
+        self.options.uri
+    }
+}
+
+#[derive(Constructor)]
+struct BuildOptions<'a> {
+    st: &'a State,
+    uri: &'a Uri,
+    pb: Option<Arc<Build>>,
+    pat: Option<IncludePattern<'a>>,
+    pat_sources: Option<IncludePatternSources>,
+}
+
+impl Build {
+    pub fn create(mut opt_builder: BuildOptionsBuilder) -> anyhow::Result<Self> {
+        if opt_builder.options.pat.is_none() {
+            return Build::emit(&opt_builder.options).map(|s| s.0);
+        }
+
+        let pat_source = opt_builder.options.pat.as_ref().unwrap().source;
+        let (_, pat_sources) = Build::emit(&opt_builder.options)?;
+
+        if !pat_sources.as_ref().unwrap().contains(&pat_source) {
+            let msg = "build does not contain desired include pattern";
+            return Err(anyhow::Error::msg(msg));
+        }
+
+        opt_builder.options.pat_sources = pat_sources;
+        opt_builder.options.pat = None;
+
+        let (build_with_tree_shaking, _) = Build::emit(&opt_builder.options)?;
+        let sources = &build_with_tree_shaking.sources();
+
+        debug_assert!(sources.iter().any(|s| SourceHash::new(s) == pat_source));
+
+        Ok(build_with_tree_shaking)
+    }
+
+    fn emit(opt: &BuildOptions) -> anyhow::Result<(Self, Option<IncludePatternSources>)> {
+        let doc = opt.st.get_doc(opt.uri)?;
         let (mut initial_buf, sources_cap, tokens_cap) = {
-            match prev_build {
+            match &opt.pb {
                 Some(b) => (
                     String::with_capacity(b.content.len()),
                     b.sources().len(),
@@ -153,76 +178,79 @@ impl Build {
         initial_buf.push_str("https://evanw.github.io/source-map-visualization/ ");
         initial_buf.push_str("by glscript-language-server */\n");
 
-        let default_doc = &state.get_default_doc();
+        let default_doc = &opt.st.get_default_doc();
         let new_ctx = || {
             let visited = HashSet::<SourceHash>::with_capacity(sources_cap);
-            let sources = include_sources.clone();
-            let pat = include_pattern.clone();
-            Context::new(state, default_doc, visited, pat, sources, false)
+            let sources = opt.pat_sources.clone();
+            let pat = opt.pat.clone();
+            Context::new(opt.st, default_doc, visited, pat, sources, false)
         };
 
         {
             let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
             let mut emit_state = Emit::WithSourceMapBuilderAndDstLine(builder, 1);
-            Emit::prepare_par_iter(&mut emit_state, &mut new_ctx(), uri);
-            emit_state.finish(state);
+            Emit::prepare_par_iter(&mut emit_state, &mut new_ctx(), opt.uri);
+            emit_state.finish(opt.st);
         }
 
         let sourcemap_task = || {
             let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
             let mut emit_sourcemap_state = Emit::WithSourceMapBuilderAndDstLine(builder, 1);
-            Emit::sourcemap(&mut emit_sourcemap_state, &mut new_ctx(), uri);
-            match emit_sourcemap_state.finish(state) {
+            Emit::sourcemap(&mut emit_sourcemap_state, &mut new_ctx(), opt.uri);
+            match emit_sourcemap_state.finish(opt.st) {
                 EmitResult::TokensCountAndSourceMap(count, sm) => (count, sm),
                 _ => unreachable!(),
             }
         };
         let content_task = || {
-            let include_pat_sources = include_pattern.as_ref().map(|_| HashSet::default());
-            let mut st = Emit::WithDstContent(initial_buf, include_pat_sources);
-            Emit::content(&mut st, &mut new_ctx(), uri);
-            match st.finish(state) {
+            let include_pat_sources = opt.pat.as_ref().map(|_| HashSet::default());
+            let mut emit_st = Emit::WithDstContent(initial_buf, include_pat_sources);
+            Emit::content(&mut emit_st, &mut new_ctx(), opt.uri);
+            match emit_st.finish(opt.st) {
                 EmitResult::Content(content, include_pat_sources) => (content, include_pat_sources),
                 _ => unreachable!(),
             }
         };
 
-        // TODO: rebuild only sourcemap on dep_hash eq prev
         let ((tokens_count, source_map), (content, include_pattern_sources)) =
-            rayon::join(sourcemap_task, content_task);
+            rayon::join(sourcemap_task, content_task); // TODO: rebuild only sourcemap on dep_hash eq prev
 
         #[cfg(debug_assertions)]
-        {
-            use crate::proxy::PROXY_WORKSPACE;
-            use base64::prelude::{BASE64_STANDARD, Engine as _};
-
-            let mut sm_json = Vec::new();
-            let _ = source_map.to_writer(&mut sm_json);
-            let sm_base64 = BASE64_STANDARD.encode(&sm_json);
-            let build = format!(
-                "{}\n//# sourceMappingURL=data:application/json;base64,{}",
-                &content, sm_base64
-            );
-            let debug_source = doc.source.to_string() + BUILD_FILE_EXT;
-            let proxy_ws = state.get_project().join(PROXY_WORKSPACE);
-            let debug_filepath = proxy_ws.join("./debug").join(debug_source);
-            let mut sourcemap_file = debug_filepath.clone();
-            sourcemap_file.add_extension("map");
-            std::fs::create_dir_all(debug_filepath.parent().unwrap()).unwrap();
-            std::fs::write(debug_filepath.clone(), build).unwrap();
-            std::fs::write(sourcemap_file, String::from_utf8(sm_json)?).unwrap();
-        }
+        emit_on_disk(opt, &doc, &source_map, &content)?;
 
         let emit_uri = (*doc.build_uri).clone();
-        let build = Build {
-            content,
-            uri: emit_uri,
-            source_map,
-            tokens_count,
-        };
+        let build = Build::new(content, emit_uri, source_map, tokens_count);
 
         Ok((build, include_pattern_sources))
     }
+}
+
+#[cfg(debug_assertions)]
+fn emit_on_disk(
+    opt: &BuildOptions<'_>,
+    doc: &crate::types::Document,
+    source_map: &SourceMap,
+    content: &String,
+) -> Result<(), anyhow::Error> {
+    use crate::proxy::PROXY_WORKSPACE;
+    use base64::prelude::{BASE64_STANDARD, Engine as _};
+
+    let mut sm_json = Vec::new();
+    let _ = source_map.to_writer(&mut sm_json);
+    let sm_base64 = BASE64_STANDARD.encode(&sm_json);
+    let build = format!(
+        "{}\n//# sourceMappingURL=data:application/json;base64,{}",
+        &content, sm_base64
+    );
+    let debug_source = doc.source.to_string() + BUILD_FILE_EXT;
+    let proxy_ws = opt.st.get_project().join(PROXY_WORKSPACE);
+    let debug_filepath = proxy_ws.join("./debug").join(debug_source);
+    let mut sourcemap_file = debug_filepath.clone();
+    sourcemap_file.add_extension("map");
+    std::fs::create_dir_all(debug_filepath.parent().unwrap()).unwrap();
+    std::fs::write(debug_filepath.clone(), build).unwrap();
+    std::fs::write(sourcemap_file, String::from_utf8(sm_json)?).unwrap();
+    Ok(())
 }
 
 #[derive(Constructor)]
