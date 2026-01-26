@@ -1,9 +1,9 @@
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::router::Router;
-use async_lsp::{ErrorCode, LanguageServer, ResponseError, lsp_types as lsp};
+use async_lsp::{ErrorCode, LanguageServer, ResponseError, ServerSocket, lsp_types as lsp};
 
 use crate::builder::Build;
-use crate::proxy::{DECL_FILE_EXT, JS_FILE_EXT, Proxy, ResFut};
+use crate::proxy::{DECL_FILE_EXT, JS_FILE_EXT, JS_LANG_ID, Proxy, ResFut};
 use crate::types::Source;
 
 mod common_features;
@@ -61,6 +61,19 @@ pub fn definition_params(uri: Uri, pos: lsp::Position) -> lsp::GotoDefinitionPar
         work_done_progress_params: lsp::WorkDoneProgressParams::default(),
         partial_result_params: lsp::PartialResultParams::default(),
     }
+}
+
+pub fn did_open_once(s: &mut ServerSocket, uri: &Uri, text: &str) -> Result<(), ResponseError> {
+    s.did_open(lsp::DidOpenTextDocumentParams {
+        text_document: lsp::TextDocumentItem::new(uri.clone(), JS_LANG_ID.into(), 1, text.into()),
+    })
+    .map_err(Error::request_failed)
+}
+
+pub fn did_close(s: &mut ServerSocket, uri: &Uri) -> Result<(), ResponseError> {
+    let text_document = lsp::TextDocumentIdentifier::new(uri.clone());
+    s.did_close(lsp::DidCloseTextDocumentParams { text_document })
+        .map_err(Error::request_failed)
 }
 
 pub fn references_params(uri: Uri, pos: lsp::Position) -> lsp::ReferenceParams {

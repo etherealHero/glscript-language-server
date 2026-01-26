@@ -8,16 +8,13 @@ use async_lsp::{LanguageClient, LanguageServer, ResponseError, lsp_types as lsp}
 use tokio::time::{Duration, timeout};
 
 use crate::builder::Build;
-use crate::proxy::language_server::{
-    DefRes, Error, definition_params, forward_build_range, references_params,
-};
+use crate::proxy::language_server::{DefRes, Error, did_close, did_open_once, forward_build_range};
+use crate::proxy::language_server::{definition_params, references_params};
 use crate::proxy::{Canonicalize, Proxy, ResFut};
-use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT, JS_LANG_ID};
+use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT};
 use crate::state::State;
-use crate::types::{IncludePattern, SourceHash};
+use crate::types::{SourceHash, SourcePattern};
 use crate::{try_ensure_build, try_forward_text_document_position_params};
-
-const TEMPORARY_SCRIPT: &str = "file:///.virtual/refs.js";
 
 pub fn proxy_workspace_references(
     this: &mut Proxy,
@@ -36,7 +33,7 @@ pub fn proxy_workspace_references(
     let mut client = this.client();
     let st = this.state.clone();
     let root = st.get_project().clone();
-    let temp = Some(Uri::from_str(TEMPORARY_SCRIPT).unwrap());
+    let temp_uri = Uri::from_str("file:///.virtual/refs.js").unwrap();
 
     Box::pin(async move {
         let def_loc = get_definition_location(definition_request).await?;
@@ -59,14 +56,7 @@ pub fn proxy_workspace_references(
         for (i, doc_uri) in unopened_docs.iter().enumerate() {
             let try_open = |s: &mut async_lsp::ServerSocket| {
                 let build = st.get_build(doc_uri).unwrap();
-                s.did_open(lsp::DidOpenTextDocumentParams {
-                    text_document: lsp::TextDocumentItem::new(
-                        temp.clone().unwrap(),
-                        JS_LANG_ID.into(),
-                        1,
-                        build.content.clone(),
-                    ),
-                })
+                did_open_once(s, &temp_uri, &build.content)
             };
 
             if st.cancel_received.load() || try_open(&mut s).is_err() {
@@ -77,7 +67,7 @@ pub fn proxy_workspace_references(
             let doc_path = st.uri_to_path(doc_uri).unwrap();
             let doc_path = doc_path.strip_prefix(&root).unwrap_or(&doc_path);
             let msg = format!("tsserver request {}", doc_path.display());
-            let t = temp.clone();
+            let t = Some(temp_uri.clone());
 
             if traverse(doc_uri, &def_loc, &mut s, &st, &root, &mut ws_locs, t)
                 .await
@@ -85,9 +75,7 @@ pub fn proxy_workspace_references(
             {
                 is_sync_doc_failed = true;
             };
-            let _ = s.did_close(lsp::DidCloseTextDocumentParams {
-                text_document: lsp::TextDocumentIdentifier::new(temp.clone().unwrap()),
-            });
+            let _ = did_close(&mut s, &temp_uri);
 
             st.send_progress(&mut client, (i, unopened_docs.len()), &msg);
             st.remove_build(doc_uri);
@@ -186,7 +174,7 @@ fn get_unopened_documents(
     let matched_docs: Vec<Uri> = raw_entries
         .par_iter()
         .filter_map(|p| {
-            let pat = IncludePattern::new(&def_lit, source_hash);
+            let pat = SourcePattern::new(&def_lit, source_hash);
             let uri = state.path_to_uri(p.as_path()).ok();
             if uri.is_none() || !p.extension().is_some_and(|ext| ext == js || ext == decl) {
                 return None;

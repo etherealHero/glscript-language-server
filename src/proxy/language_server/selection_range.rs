@@ -7,6 +7,7 @@ use crate::proxy::{Proxy, ResFut};
 use crate::try_ensure_build;
 use crate::types::Source;
 
+// TODO: proxy with virtual script without resole include stmt to save time of ts req
 #[tracing::instrument(skip_all)]
 pub fn proxy_selection_range(
     this: &mut Proxy,

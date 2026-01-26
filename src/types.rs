@@ -88,7 +88,7 @@ impl SourceHash {
 }
 
 #[derive(Constructor, Clone)]
-pub struct IncludePattern<'a> {
+pub struct SourcePattern<'a> {
     pub lit: &'a str,
     pub source: SourceHash,
 }

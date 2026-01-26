@@ -3,6 +3,7 @@ use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::BUILD_FILE_EXT;
 use crate::proxy::Canonicalize;
+use crate::proxy::language_server::did_close;
 use crate::proxy::{JS_LANG_ID, Proxy, ResFut, language_server::NotifyResult};
 use crate::try_ensure_build;
 
@@ -79,9 +80,7 @@ pub fn proxy_did_save(this: &mut Proxy, params: lsp::DidSaveTextDocumentParams) 
 pub fn proxy_did_close(this: &mut Proxy, params: lsp::DidCloseTextDocumentParams) -> NotifyResult {
     let uri = &params.text_document.uri;
     if let Some(build) = this.state.get_build(uri) {
-        let _ = this.server().did_close(lsp::DidCloseTextDocumentParams {
-            text_document: lsp::TextDocumentIdentifier::new(build.uri.clone()),
-        });
+        let _ = did_close(&mut this.server(), &build.uri);
         this.state.remove_build(uri);
     } else {
         this.server().did_close(params).expect("did close")

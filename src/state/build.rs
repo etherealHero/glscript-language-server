@@ -6,7 +6,7 @@ use async_lsp::lsp_types::Url as Uri;
 use crate::builder::{Build, BuildOptionsBuilder};
 use crate::proxy::Canonicalize;
 use crate::state::State;
-use crate::types::{BuildWithVersion, IncludePattern, Source};
+use crate::types::{BuildWithVersion, Source, SourcePattern};
 
 /// State of builds
 impl State {
@@ -34,10 +34,14 @@ impl State {
     pub fn set_build_by_tree_shaking(
         &self,
         source_uri: &Uri,
-        include_pattern: IncludePattern,
+        pat: SourcePattern,
     ) -> anyhow::Result<BuildWithVersion> {
         let opt = BuildOptionsBuilder::init(source_uri, self);
-        self.build(opt.with_include_pattern(include_pattern))
+        self.build(opt.with_source_pattern(pat))
+    }
+
+    pub fn transpile_doc(&self, source_uri: &Uri) -> anyhow::Result<Build> {
+        Build::create(BuildOptionsBuilder::init(source_uri, self).transpile_mode())
     }
 
     pub fn get_build(&self, source_uri: &Uri) -> Option<Arc<Build>> {
