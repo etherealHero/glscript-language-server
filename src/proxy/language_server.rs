@@ -63,7 +63,7 @@ pub fn definition_params(uri: Uri, pos: lsp::Position) -> lsp::GotoDefinitionPar
     }
 }
 
-pub fn did_open_once(s: &mut ServerSocket, uri: &Uri, text: &str) -> Result<(), ResponseError> {
+pub fn first_did_open(s: &mut ServerSocket, uri: &Uri, text: &str) -> Result<(), ResponseError> {
     s.did_open(lsp::DidOpenTextDocumentParams {
         text_document: lsp::TextDocumentItem::new(uri.clone(), JS_LANG_ID.into(), 1, text.into()),
     })

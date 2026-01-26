@@ -1,15 +1,12 @@
-use std::str::FromStr;
-
-use async_lsp::lsp_types::{Url as Uri, request as R};
+use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::Build;
-use crate::proxy::language_server::{Error, did_close, did_open_once, forward_build_range};
+use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
 use crate::try_ensure_build;
 use crate::types::{SCRIPT_IDENTIFIER_PREFIX, Source};
 
-// TODO: client send req twice (ignore second req)
 #[tracing::instrument(skip_all)]
 pub fn proxy_document_symbol(
     this: &mut Proxy,
@@ -21,15 +18,16 @@ pub fn proxy_document_symbol(
     let state = this.state.clone();
     let req_uri = params.text_document.uri.clone();
     let req_source = state.get_doc(&req_uri).unwrap().source;
-    let temp_uri = Uri::from_str("file:///.virtual/transpiled.js").unwrap();
 
-    params.text_document.uri = temp_uri.clone();
+    params.text_document.uri = state.get_active_transpiled_buffer();
 
     Box::pin(async move {
         let transpiled_doc = &state.transpile_doc(&req_uri).unwrap();
+        let changes = state.set_active_transpiled_buffer(&transpiled_doc.content);
 
-        did_open_once(&mut s, &temp_uri, &transpiled_doc.content)?;
-        let res = match s.document_symbol(params).await.map_err(Error::internal) {
+        s.did_change(changes).unwrap();
+
+        match s.document_symbol(params).await.map_err(Error::internal) {
             Ok(Some(lsp::DocumentSymbolResponse::Nested(symbols))) => {
                 let source_symbols = forward(&Some(symbols), transpiled_doc, &req_source);
                 let source_symbols = source_symbols.unwrap_or_default();
@@ -38,10 +36,7 @@ pub fn proxy_document_symbol(
             Ok(Some(_)) => Err(Error::forward_failed()),
             Ok(res) => Ok(res),
             Err(err) => Err(err),
-        };
-
-        did_close(&mut s, &temp_uri)?;
-        res
+        }
     })
 }
 

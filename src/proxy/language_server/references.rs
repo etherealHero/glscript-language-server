@@ -8,8 +8,9 @@ use async_lsp::{LanguageClient, LanguageServer, ResponseError, lsp_types as lsp}
 use tokio::time::{Duration, timeout};
 
 use crate::builder::Build;
-use crate::proxy::language_server::{DefRes, Error, did_close, did_open_once, forward_build_range};
+use crate::proxy::language_server::{DefRes, Error, forward_build_range};
 use crate::proxy::language_server::{definition_params, references_params};
+use crate::proxy::language_server::{did_close, first_did_open};
 use crate::proxy::{Canonicalize, Proxy, ResFut};
 use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT};
 use crate::state::State;
@@ -56,7 +57,7 @@ pub fn proxy_workspace_references(
         for (i, doc_uri) in unopened_docs.iter().enumerate() {
             let try_open = |s: &mut async_lsp::ServerSocket| {
                 let build = st.get_build(doc_uri).unwrap();
-                did_open_once(s, &temp_uri, &build.content)
+                first_did_open(s, &temp_uri, &build.content)
             };
 
             if st.cancel_received.load() || try_open(&mut s).is_err() {

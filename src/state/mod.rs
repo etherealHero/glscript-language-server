@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use async_lsp::lsp_types as lsp;
@@ -22,6 +23,9 @@ type UnforwardedBuildChanges = DashMap<PathBuf, Vec<lsp::DidChangeTextDocumentPa
 pub struct State {
     pub cancel_received: Arc<crossbeam::atomic::AtomicCell<bool>>,
 
+    active_transpiled_buffer_ver: Arc<crossbeam::atomic::AtomicCell<i32>>,
+    active_transpiled_buffer: Arc<OnceLock<Uri>>,
+
     work_done_progress_present: Arc<crossbeam::atomic::AtomicCell<bool>>,
     work_done_progress_token: Arc<OnceLock<lsp::NumberOrString>>,
 
@@ -44,6 +48,10 @@ impl State {
         let path = self.uri_to_path(source_uri).unwrap();
         let msg = "project initialize once";
         let ident = lsp::NumberOrString::String("glscript".into());
+        let atb = Uri::from_str("file:///.virtual/active_transpiled_buffer.js").unwrap();
+
+        self.active_transpiled_buffer_ver.store(1);
+        self.active_transpiled_buffer.set(atb).expect(msg);
         self.project_path.set(path).expect(msg);
         self.work_done_progress_token.set(ident).expect(msg);
     }
@@ -57,5 +65,26 @@ impl State {
         let path = path.join(PROXY_WORKSPACE).join(DEFAULT_SCRIPT_FILENAME);
         let default_doc = self.path_to_uri(&path);
         default_doc.unwrap_or(Uri::from_file_path(path).unwrap().canonicalize().unwrap())
+    }
+
+    pub fn get_active_transpiled_buffer(&self) -> Uri {
+        self.active_transpiled_buffer.get().unwrap().clone()
+    }
+
+    pub fn set_active_transpiled_buffer(&self, text: &str) -> lsp::DidChangeTextDocumentParams {
+        let current_ver = self.active_transpiled_buffer_ver.load();
+        self.active_transpiled_buffer_ver.store(current_ver + 1);
+
+        lsp::DidChangeTextDocumentParams {
+            text_document: lsp::VersionedTextDocumentIdentifier {
+                uri: self.get_active_transpiled_buffer(),
+                version: current_ver + 1,
+            },
+            content_changes: vec![lsp::TextDocumentContentChangeEvent {
+                text: text.into(),
+                range_length: None,
+                range: None,
+            }],
+        }
     }
 }
