@@ -9,10 +9,13 @@ use crate::types::Source;
 mod common_features;
 mod completion;
 mod definition;
+mod doc_symbol;
 mod doc_sync;
 mod hover;
 mod lifecycle;
 mod references;
+mod selection_range;
+mod ws_symbol;
 
 pub type NotifyResult = std::ops::ControlFlow<async_lsp::Result<()>>;
 pub type DefRes = lsp::GotoDefinitionResponse;
@@ -33,13 +36,16 @@ impl Error {
         let err = format!("{reason}, expect '{JS_FILE_EXT}' or '{DECL_FILE_EXT}'. Request aborted");
         ResponseError::new(ErrorCode::REQUEST_FAILED, err)
     }
+
+    pub fn forward_failed() -> ResponseError {
+        ResponseError::new(ErrorCode::REQUEST_FAILED, "Forward failed")
+    }
 }
 
 pub fn forward_build_range(range: &mut lsp::Range, build: &Build) -> Result<Source, ResponseError> {
     let source_range = build.forward_build_range(range);
     if source_range.is_none() {
-        let err = format!("Forward back build range `{:?}` failed", range);
-        return Err(Error::request_failed(err));
+        return Err(Error::forward_failed());
     }
     let source_range = source_range.expect("is some");
     *range = source_range.0;
@@ -92,7 +98,11 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::ResolveCompletionItem, _>(completion::proxy_completion_item_resolve)
         .request::<R::References, _>(Proxy::references)
         .request::<R::PrepareRenameRequest, _>(common_features::proxy_prepare_rename)
-        .request::<R::Rename, _>(common_features::proxy_rename);
+        .request::<R::Rename, _>(common_features::proxy_rename)
+        .request::<R::SelectionRangeRequest, _>(selection_range::proxy_selection_range)
+        .request::<R::DocumentSymbolRequest, _>(doc_symbol::proxy_document_symbol)
+        .request::<R::WorkspaceSymbolRequest, _>(ws_symbol::proxy_symbol)
+        .request::<R::WorkspaceSymbolResolve, _>(ws_symbol::proxy_workspace_symbol_resolve);
     router
 }
 
@@ -109,6 +119,37 @@ impl LanguageServer for Proxy {
     fn definition(&mut self, params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
         let req = definition::proxy_definition(self, params);
         Box::pin(async move { req.await })
+    }
+
+    fn folding_range(&mut self, _: lsp::FoldingRangeParams) -> ResFut<R::FoldingRangeRequest> {
+        todo!()
+    }
+
+    fn formatting(&mut self, _: lsp::DocumentFormattingParams) -> ResFut<R::Formatting> {
+        todo!()
+    }
+
+    fn range_formatting(
+        &mut self,
+        _: lsp::DocumentRangeFormattingParams,
+    ) -> ResFut<R::RangeFormatting> {
+        todo!()
+    }
+
+    // TODO: https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/formatting.ts
+    fn on_type_formatting(
+        &mut self,
+        _: lsp::DocumentOnTypeFormattingParams,
+    ) -> ResFut<R::OnTypeFormatting> {
+        todo!()
+    }
+
+    fn inlay_hint(&mut self, _: lsp::InlayHintParams) -> ResFut<R::InlayHintRequest> {
+        todo!()
+    }
+
+    fn inlay_hint_resolve(&mut self, _: lsp::InlayHint) -> ResFut<R::InlayHintResolveRequest> {
+        todo!()
     }
 
     #[tracing::instrument(skip_all)]

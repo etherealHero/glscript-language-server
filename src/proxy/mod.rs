@@ -111,8 +111,7 @@ macro_rules! try_forward_text_document_position_params {
             *uri = $build.uri.clone();
         } else {
             use $crate::proxy::language_server::Error;
-            let err = format!("Forward src position `{pos:?}` failed");
-            return Err(Error::request_failed(err));
+            return Err(Error::forward_failed());
         };
     }};
 }

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
@@ -18,7 +18,7 @@ mod progress;
 type UnforwardedDocChanges = DashMap<PathBuf, Vec<(lsp::DidChangeTextDocumentParams, bool)>>; // Vec<(_, dependency_changed)>
 type UnforwardedBuildChanges = DashMap<PathBuf, Vec<lsp::DidChangeTextDocumentParams>>;
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct State {
     pub cancel_received: Arc<crossbeam::atomic::AtomicCell<bool>>,
 
@@ -27,6 +27,7 @@ pub struct State {
 
     project_path: Arc<OnceLock<PathBuf>>,
     documents: DashMap<PathBuf, Document>,
+    current_document: Arc<Mutex<Option<Uri>>>,
     builds: DashMap<PathBuf, BuildWithVersion>,
 
     unforwarded_doc_changes: UnforwardedDocChanges,

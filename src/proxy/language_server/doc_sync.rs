@@ -2,6 +2,7 @@ use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::BUILD_FILE_EXT;
+use crate::proxy::Canonicalize;
 use crate::proxy::{JS_LANG_ID, Proxy, ResFut, language_server::NotifyResult};
 use crate::try_ensure_build;
 
@@ -119,6 +120,10 @@ pub fn proxy_sync_doc_by_code_lens_request(
     params: lsp::CodeLensParams,
 ) -> ResFut<R::CodeLensRequest> {
     let uri = &params.text_document.uri;
+    let state = this.state.clone();
+    if state.get_current_doc() != Some(uri.try_canonicalize()) {
+        state.set_current_doc(uri);
+    }
     try_ensure_build!(this, uri, params, code_lens);
     Box::pin(async move { Ok(Some(vec![])) }) // TODO:
 }

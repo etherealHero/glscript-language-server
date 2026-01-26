@@ -7,7 +7,7 @@ use async_lsp::lsp_types::Url as Uri;
 use ropey::Rope;
 
 use crate::parser::{Token, parse};
-use crate::proxy::PROXY_WORKSPACE;
+use crate::proxy::{Canonicalize, PROXY_WORKSPACE};
 use crate::state::State;
 use crate::types::{Document, DocumentDeclarationStatement, DocumentLinkStatement};
 use crate::types::{DocumentIdentifier, Source, SourceHash};
@@ -107,5 +107,14 @@ impl State {
 
         self.set_doc(source_uri, content)?;
         self.get_doc(source_uri)
+    }
+
+    pub fn get_current_doc(&self) -> Option<Uri> {
+        self.current_document.lock().unwrap().clone()
+    }
+
+    pub fn set_current_doc(&self, source_uri: &Uri) {
+        let mut guard = self.current_document.lock().unwrap();
+        *guard = Some(source_uri.try_canonicalize());
     }
 }
