@@ -88,5 +88,5 @@ MultiLineCommentOpenBracket  = @{ "/*" }
 MultiLineCommentChars        = @{ (!(MultiLineCommentCloseBracket | LineTerminator) ~ _maybeEscapedChar)+ }
 MultiLineCommentCloseBracket = @{ "*/" }
 _muliLineComment             = _{
-    MultiLineCommentOpenBracket ~ (LineTerminator | MultiLineCommentChars)+ ~ MultiLineCommentCloseBracket
+    MultiLineCommentOpenBracket ~ (LineTerminator | MultiLineCommentChars)* ~ MultiLineCommentCloseBracket
 }
