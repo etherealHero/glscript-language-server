@@ -115,7 +115,8 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::SelectionRangeRequest, _>(selection_range::proxy_selection_range)
         .request::<R::DocumentSymbolRequest, _>(doc_symbol::proxy_document_symbol)
         .request::<R::WorkspaceSymbolRequest, _>(ws_symbol::proxy_symbol)
-        .request::<R::WorkspaceSymbolResolve, _>(ws_symbol::proxy_workspace_symbol_resolve);
+        .request::<R::WorkspaceSymbolResolve, _>(ws_symbol::proxy_workspace_symbol_resolve)
+        .request::<R::FoldingRangeRequest, _>(common_features::proxy_folding_range);
     router
 }
 
@@ -132,10 +133,6 @@ impl LanguageServer for Proxy {
     fn definition(&mut self, params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
         let req = definition::proxy_definition(self, params);
         Box::pin(async move { req.await })
-    }
-
-    fn folding_range(&mut self, _: lsp::FoldingRangeParams) -> ResFut<R::FoldingRangeRequest> {
-        todo!()
     }
 
     fn formatting(&mut self, _: lsp::DocumentFormattingParams) -> ResFut<R::Formatting> {

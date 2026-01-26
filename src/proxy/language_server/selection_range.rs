@@ -5,7 +5,6 @@ use crate::builder::Build;
 use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
 use crate::try_ensure_build;
-use crate::types::Source;
 
 #[tracing::instrument(skip_all)]
 pub fn proxy_selection_range(
@@ -39,12 +38,11 @@ pub fn proxy_selection_range(
         if let Ok(Some(ref mut selections)) = res {
             let mut source_selections = Vec::with_capacity(selections.len());
             for s in selections {
-                if forward_build_range(&mut s.range, transpiled_doc)? == *req_source {
-                    source_selections.push(lsp::SelectionRange {
-                        range: s.range,
-                        parent: forward(&s.parent, transpiled_doc, &req_source),
-                    });
-                }
+                forward_build_range(&mut s.range, transpiled_doc)?;
+                source_selections.push(lsp::SelectionRange {
+                    range: s.range,
+                    parent: forward(&s.parent, transpiled_doc),
+                });
             }
             res = Ok(Some(source_selections));
         }
@@ -56,17 +54,13 @@ pub fn proxy_selection_range(
 fn forward(
     ps: &Option<Box<lsp::SelectionRange>>,
     build: &Build,
-    source: &Source,
 ) -> Option<Box<lsp::SelectionRange>> {
     if let Some(ps) = ps {
         let mut ps = ps.clone();
-        let ps_source = forward_build_range(&mut ps.range, build).ok()?;
-        if &ps_source != source {
-            return None;
-        }
+        forward_build_range(&mut ps.range, build).ok()?;
         Some(Box::new(lsp::SelectionRange {
             range: ps.range,
-            parent: forward(&ps.parent, build, source),
+            parent: forward(&ps.parent, build),
         }))
     } else {
         None

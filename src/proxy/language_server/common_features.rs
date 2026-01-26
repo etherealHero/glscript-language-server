@@ -72,3 +72,45 @@ pub fn proxy_prepare_rename(
         res
     })
 }
+
+#[tracing::instrument(skip_all)]
+pub fn proxy_folding_range(
+    this: &mut Proxy,
+    mut params: lsp::FoldingRangeParams,
+) -> ResFut<R::FoldingRangeRequest> {
+    let mut s = this.server();
+    let uri = &params.text_document.uri;
+    try_ensure_build!(this, uri, params, folding_range);
+    let state = this.state.clone();
+    let req_uri = params.text_document.uri.clone();
+    let get_range = |f: &lsp::FoldingRange, text: &str| {
+        let start_ch = || text.lines().next().unwrap_or_default().len() as u32;
+        let end_ch = || text.lines().last().unwrap_or_default().len() as u32;
+        lsp::Range::new(
+            lsp::Position::new(f.start_line, f.start_character.unwrap_or_else(start_ch)),
+            lsp::Position::new(f.end_line, f.end_character.unwrap_or_else(end_ch)),
+        )
+    };
+
+    params.text_document.uri = state.get_active_transpiled_buffer();
+
+    Box::pin(async move {
+        let transpiled_doc = &state.transpile_doc(&req_uri).unwrap();
+        let changes = state.set_active_transpiled_buffer(&transpiled_doc.content);
+
+        s.did_change(changes).unwrap();
+
+        let mut res = s.folding_range(params).await.map_err(Error::internal);
+        if let Ok(Some(ref mut foldings)) = res {
+            for f in foldings {
+                let mut range = get_range(f, &transpiled_doc.content);
+                forward_build_range(&mut range, transpiled_doc).unwrap();
+                f.start_line = range.start.line;
+                f.start_character = range.start.character.into();
+                f.end_line = range.end.line;
+                f.end_character = range.end.character.into();
+            }
+        }
+        res
+    })
+}
