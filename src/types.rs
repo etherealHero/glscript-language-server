@@ -36,6 +36,9 @@ pub struct Document {
 }
 
 // TODO: refactor with from SourceMap::Token, LSP Uri (< SourceUri)
+/// must contains lowercase canonicalized strip prefixed path
+/// - is used as source in [`sourcemap`]
+/// - use to identify the source file
 #[derive(Debug, Eq, PartialEq, Hash, Clone, From, Into, Deref, Display, Constructor)]
 pub struct Source(String);
 
@@ -136,7 +139,7 @@ pub struct SourcePattern<'a> {
     pub source: SourceHash,
 }
 
-/// compatibility ECMAScript identifier hash from [`Source`]
+/// compatibility [ECMAScript identifier](https://tc39.es/ecma262/#prod-grammar-notation-Identifier) by [`Source`]
 #[derive(Debug, Clone, Deref)]
 pub struct DocumentIdentifier(Source);
 

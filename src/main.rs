@@ -1,8 +1,14 @@
+mod builder;
+mod parser;
+mod proxy;
+mod state;
+mod types;
+
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use glscript_language_server::proxy::Proxy;
+use crate::proxy::Proxy;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -11,14 +17,15 @@ async fn main() {
         .with_ansi(false)
         .with_writer(std::io::stderr)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .with_line_number(false)
+        .with_target(false)
         .init();
 
     let server = &std::env::args()
         .nth(1)
         .expect("expect argument to the forwarded LSP server");
-    let server_arg = if server.contains("tsgo") { "--lsp" } else { "" };
+
     let mut child = async_process::Command::new(server)
-        .arg(server_arg)
         .arg("--stdio")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
