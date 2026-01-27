@@ -50,19 +50,19 @@ pub fn proxy_did_change(
     }
 
     let doc = this.state.get_doc(uri).unwrap();
-    let hash_prev = doc.dependency_hash;
+    let hash_prev = doc.transpile_hash;
 
     // 1. apply changes to raw document
     this.state.set_doc(uri, &params.content_changes).unwrap();
-    let hash_new = this.state.get_doc(uri).unwrap().dependency_hash;
-    let dep_changed = hash_prev != hash_new;
+    let hash_new = this.state.get_doc(uri).unwrap().transpile_hash;
+    let transpile_changed = hash_prev != hash_new;
 
     // 2. forward params into language server
     let builds_contains_source = this.state.get_builds_contains_source(&doc.source);
     for doc_of_build_path in builds_contains_source {
         let params = params.clone();
         this.state
-            .add_client_doc_changes(doc_of_build_path, params, dep_changed);
+            .add_client_doc_changes(doc_of_build_path, params, transpile_changed);
     }
 
     // 3. commit req doc

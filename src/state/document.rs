@@ -41,7 +41,7 @@ impl State {
                 buffer: Rope::new(),
                 tokens: vec![].into(),
                 content: String::new().into(),
-                dependency_hash: Into::into(&vec![]),
+                transpile_hash: (&vec![], None).into(),
 
                 decl_stmt: DocumentDeclarationStatement::create(&source, &source_ident).into(),
                 link_stmt: DocumentLinkStatement::create(&source, &source_ident).into(),
@@ -60,7 +60,6 @@ impl State {
             let tokens = parse(&content_ref);
             let tokens = unsafe { transmute::<Vec<Token<'_>>, Vec<Token<'static>>>(tokens) };
 
-            doc.dependency_hash = Into::into(&tokens);
             doc.tokens = tokens.into();
             doc.content = content;
         };
@@ -69,6 +68,7 @@ impl State {
             let new_text = changes[0].text.as_str();
             doc.buffer = Rope::from_str(new_text);
             patch_doc_content(&mut doc, new_text);
+            doc.transpile_hash = (doc.tokens.as_ref(), None).into();
             return Ok(());
         }
 
@@ -84,6 +84,7 @@ impl State {
 
         let full_text = &doc.buffer.to_string();
         patch_doc_content(&mut doc, full_text);
+        doc.transpile_hash = (doc.tokens.as_ref(), changes.into()).into();
         Ok(())
     }
 

@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use async_lsp::lsp_types::Url as Uri;
+use async_lsp::lsp_types::{self as lsp, Url as Uri};
 use derive_more::{Constructor, Deref, Display, From, Into};
 use sha2::{Digest, Sha256};
 
@@ -30,7 +30,7 @@ pub struct Document {
     pub buffer: ropey::Rope,
     pub tokens: Arc<Vec<Token<'static>>>,
 
-    pub dependency_hash: DependencyHash,
+    pub transpile_hash: TranspileHash,
     pub decl_stmt: Arc<DocumentDeclarationStatement>,
     pub link_stmt: Arc<DocumentLinkStatement>,
 }
@@ -59,22 +59,65 @@ impl Source {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deref)]
-pub struct DependencyHash(u64);
+#[derive(Debug, Copy, Clone, Deref)]
+pub struct TranspileHash(Option<u64>);
 
-impl From<&Vec<Token<'_>>> for DependencyHash {
-    fn from(tokens: &Vec<Token>) -> Self {
+impl Hash for TranspileHash {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl PartialEq for TranspileHash {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_some_and(|s| other.is_some_and(|o| o == s))
+    }
+}
+
+type DocumentSources<'a> = (
+    &'a Vec<Token<'a>>,
+    Option<&'a [lsp::TextDocumentContentChangeEvent]>,
+);
+
+impl From<DocumentSources<'_>> for TranspileHash {
+    fn from(doc_sources: DocumentSources<'_>) -> Self {
+        let (tokens, changes) = doc_sources;
         let hasher = &mut fxhash::FxHasher64::default();
+        let changes = changes.unwrap_or(&[]);
 
         for t in tokens.iter() {
-            if let Token::IncludePath(token) = t {
-                token.line_col.col.hash(hasher);
-                token.line_col.line.hash(hasher);
-                token.path.hash(hasher);
+            let r_token = match t {
+                Token::IncludePath(path_lit) => {
+                    let (col, ln) = (path_lit.line_col.col, path_lit.line_col.line);
+                    let end_col = col + path_lit.path.len() as u32 + 2;
+                    col.hash(hasher);
+                    ln.hash(hasher);
+                    path_lit.path.hash(hasher);
+                    lsp::Range::new(lsp::Position::new(ln, col), lsp::Position::new(ln, end_col))
+                }
+                Token::RegionOpen(span) | Token::RegionClose(span) => {
+                    let (col, ln) = (span.line_col.col, span.line_col.line);
+                    let end_col = ln + span.len;
+                    col.hash(hasher);
+                    ln.hash(hasher);
+                    span.len.hash(hasher);
+                    lsp::Range::new(lsp::Position::new(ln, col), lsp::Position::new(ln, end_col))
+                }
+                _ => continue,
+            };
+
+            for change in changes {
+                let Some(r_change) = change.range.as_ref() else {
+                    continue;
+                };
+
+                if r_token.start <= r_change.end && r_change.start <= r_token.end {
+                    return Self(None);
+                }
             }
         }
 
-        Self(hasher.finish())
+        Self(hasher.finish().into())
     }
 }
 
