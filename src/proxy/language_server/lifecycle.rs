@@ -13,9 +13,13 @@ pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut
     if let Some([root_ws, ..]) = params.workspace_folders.as_deref_mut() {
         let ws_dir = &root_ws.uri.to_file_path().unwrap();
         let proxy_ws_dir = &mut ws_dir.clone().join(PROXY_WORKSPACE);
+        let jsconfig_content = std::fs::read(ws_dir.join(JSCONFIG))
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap()
+            .replace("./node_modules/@types", "../../node_modules/@types");
 
         std::fs::create_dir_all(&proxy_ws_dir).unwrap();
-        std::fs::copy(ws_dir.join(JSCONFIG), proxy_ws_dir.join(JSCONFIG)).unwrap();
+        std::fs::write(proxy_ws_dir.join(JSCONFIG), jsconfig_content).unwrap();
 
         this.state.initialize_project(&root_ws.uri);
 

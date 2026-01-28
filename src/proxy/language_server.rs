@@ -129,7 +129,7 @@ impl LanguageServer for Proxy {
         unreachable!()
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, name = "proxy_definition")]
     fn definition(&mut self, params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
         let req = definition::proxy_definition(self, params);
         Box::pin(async move { req.await })

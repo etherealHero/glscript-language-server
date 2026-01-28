@@ -21,6 +21,9 @@ pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) 
             )
             .unwrap();
         let build_with_version = this.state.set_build(&doc.uri).unwrap();
+
+        std::fs::write(build_with_version.build.uri.to_file_path().unwrap(), "").unwrap();
+
         let _ = this.server().did_open(lsp::DidOpenTextDocumentParams {
             text_document: lsp::TextDocumentItem::new(
                 build_with_version.build.uri.clone(),
@@ -81,6 +84,7 @@ pub fn proxy_did_close(this: &mut Proxy, params: lsp::DidCloseTextDocumentParams
     let uri = &params.text_document.uri;
     if let Some(build) = this.state.get_build(uri) {
         let _ = did_close(&mut this.server(), &build.uri);
+        let _ = std::fs::remove_file(build.uri.to_file_path().unwrap());
         this.state.remove_build(uri);
     } else {
         this.server().did_close(params).expect("did close")

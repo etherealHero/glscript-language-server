@@ -30,7 +30,7 @@ impl State {
             let build_uri = {
                 // TODO: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
                 let proxy_ws = self.get_project().join(PROXY_WORKSPACE);
-                let emit_path = proxy_ws.join(format!("{}.js", source_ident.as_str()));
+                let emit_path = proxy_ws.join(format!("buffer.{}.js", source_ident.as_str()));
                 Uri::from_file_path(emit_path).map_err(|_| anyhow::anyhow!("build_uri failed"))?
             };
 
@@ -108,6 +108,14 @@ impl State {
 
         self.set_doc(source_uri, content)?;
         self.get_doc(source_uri)
+    }
+
+    pub fn get_doc_by_emit_uri(&self, emit_uri: &Uri) -> Option<Document> {
+        let emit_uri_canonicalized = emit_uri.try_canonicalize();
+        self.builds
+            .iter()
+            .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
+            .map(|e| self.get_doc(&self.path_to_uri(e.key()).unwrap()).unwrap())
     }
 
     pub fn get_current_doc(&self) -> Option<Uri> {
