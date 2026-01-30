@@ -31,7 +31,7 @@ pub fn proxy_hover_with_decl_info(
             return Ok(None);
         }
 
-        let mut hover = strip_module_hash(hover.expect("is some"));
+        let (stripped, mut hover) = strip_module_hash(hover.unwrap());
 
         if let Some(mut r) = hover.range
             && !forward_build_range(&mut r, &build).is_ok_and(|source| source == *req_source)
@@ -51,13 +51,15 @@ pub fn proxy_hover_with_decl_info(
 
         if let Ok(Some(DefRes::Link(ref l))) = decl {
             let res_uri = &l.first().unwrap().target_uri;
+            let is_local = || req_uri.try_canonicalize() == res_uri.try_canonicalize();
+
+            if stripped || is_local() {
+                return Ok(Some(hover));
+            }
+
             let path = state.uri_to_path(res_uri).unwrap();
             let root = state.get_project();
             let source = path.strip_prefix(root).unwrap_or(&path).display();
-
-            if req_uri.try_canonicalize() == res_uri.try_canonicalize() {
-                return Ok(Some(hover));
-            }
 
             hover = match path.to_str().unwrap().ends_with(DECL_FILE_EXT) {
                 true => prepend_hover(hover, "Built-in symbol"),
@@ -91,27 +93,33 @@ fn prepend_hover(mut hover: lsp::Hover, msg: &str) -> lsp::Hover {
     hover
 }
 
-fn strip_module_hash(mut hover: lsp::Hover) -> lsp::Hover {
+fn strip_module_hash(mut hover: lsp::Hover) -> (bool, lsp::Hover) {
     type H = lsp::HoverContents;
     type S = lsp::MarkedString;
 
-    let re =
-        regex::Regex::new(&format!(r"{}\w+", regex::escape(SCRIPT_IDENTIFIER_PREFIX))).unwrap();
-    let patch = |s: &str| re.replace_all(s, "ScriptFile").to_string();
+    let mut any_matched = false;
+    let ident_prefix = regex::escape(SCRIPT_IDENTIFIER_PREFIX);
+    let re = regex::Regex::new(&format!(r"{ident_prefix}\w+")).unwrap();
+    let strings: Vec<&mut String> = match &mut hover.contents {
+        H::Scalar(S::String(s)) => vec![s],
+        H::Scalar(S::LanguageString(s)) => vec![&mut s.value],
+        H::Array(items) => items
+            .iter_mut()
+            .map(|item| match item {
+                S::String(s) => s,
+                S::LanguageString(ls) => &mut ls.value,
+            })
+            .collect(),
+        H::Markup(m) => vec![&mut m.value],
+    };
 
-    match &mut hover.contents {
-        H::Scalar(S::String(s)) => *s = patch(s),
-        H::Scalar(S::LanguageString(s)) => s.value = patch(&s.value),
-        H::Array(items) => {
-            for item in items {
-                match item {
-                    S::String(s) => *s = patch(s),
-                    S::LanguageString(ls) => ls.value = patch(&ls.value),
-                }
-            }
+    for s in strings {
+        let cow = re.replace_all(s, "ScriptFile");
+        any_matched |= matches!(cow, std::borrow::Cow::Owned(_));
+        if let std::borrow::Cow::Owned(v) = cow {
+            *s = v;
         }
-        H::Markup(m) => m.value = patch(&m.value),
     }
 
-    hover
+    (any_matched, hover)
 }
