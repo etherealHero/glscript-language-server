@@ -3,7 +3,7 @@ use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
-use crate::try_ensure_build;
+use crate::try_ensure_bundle;
 
 #[tracing::instrument(skip_all)]
 pub fn proxy_symbol(
@@ -16,7 +16,7 @@ pub fn proxy_symbol(
         Some(uri) => uri,
         None => return Box::pin(async move { Ok(None) }),
     };
-    let build = try_ensure_build!(this, &uri, params, symbol);
+    let bundle = try_ensure_bundle!(this, &uri, params, symbol);
 
     Box::pin(async move {
         let project = state.get_project();
@@ -27,7 +27,7 @@ pub fn proxy_symbol(
                 let mut source_symbols = Vec::with_capacity(symbols.len());
                 for s in symbols {
                     let mut source_range = s.location.range;
-                    if let Ok(source) = forward_build_range(&mut source_range, &build) {
+                    if let Ok(source) = forward_build_range(&mut source_range, &bundle) {
                         let mut source_symbol = s.clone();
                         let path = &project.join(source.as_str());
                         source_symbol.location.uri = state.path_to_uri(path).unwrap();

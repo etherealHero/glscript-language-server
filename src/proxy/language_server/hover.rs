@@ -5,7 +5,7 @@ use tokio::time::{Duration, timeout};
 use crate::proxy::language_server::{DefRes, Error, definition_params, forward_build_range};
 use crate::proxy::{Canonicalize, DECL_FILE_EXT, Proxy, ResFut, ResReqProxy};
 use crate::types::SCRIPT_IDENTIFIER_PREFIX;
-use crate::{try_ensure_build, try_forward_text_document_position_params};
+use crate::{try_ensure_bundle, try_forward_text_document_position_params};
 
 pub fn proxy_hover_with_decl_info(
     this: &mut Proxy,
@@ -14,7 +14,7 @@ pub fn proxy_hover_with_decl_info(
     let mut service = this.server();
     let uri = &params.text_document_position_params.text_document.uri;
     let pos = &params.text_document_position_params.position;
-    let build = try_ensure_build!(this, uri, params, hover);
+    let bundle = try_ensure_bundle!(this, uri, params, hover);
 
     // TODO: send cancel req on timeout
     let decl_req = this.definition(definition_params(uri.clone(), pos.to_owned()));
@@ -24,7 +24,7 @@ pub fn proxy_hover_with_decl_info(
 
     Box::pin(async move {
         let doc_pos = &mut params.text_document_position_params;
-        try_forward_text_document_position_params!(state, build, doc_pos);
+        try_forward_text_document_position_params!(state, bundle, doc_pos);
 
         let hover = service.hover(params).await.map_err(Error::internal)?;
         if hover.is_none() {
@@ -34,7 +34,7 @@ pub fn proxy_hover_with_decl_info(
         let (stripped, mut hover) = strip_module_hash(hover.unwrap());
 
         if let Some(mut r) = hover.range
-            && !forward_build_range(&mut r, &build).is_ok_and(|source| source == *req_source)
+            && !forward_build_range(&mut r, &bundle).is_ok_and(|source| source == *req_source)
         {
             hover.range = None
         }

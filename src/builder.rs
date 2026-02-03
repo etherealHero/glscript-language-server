@@ -227,7 +227,11 @@ impl Build {
         #[cfg(debug_assertions)]
         emit_on_disk(opt, &doc, &source_map, &content)?;
 
-        let emit_uri = (*doc.build_uri).clone();
+        let emit_uri = match opt.resolve_deps {
+            true => doc.bundle_uri.as_ref().clone(),
+            false => doc.transpile_uri.as_ref().clone(),
+        };
+
         let build = Build::new(content, emit_uri, source_map, tokens_count);
 
         Ok((build, pattern_sources))

@@ -3,7 +3,7 @@ use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::proxy::{Proxy, ResFut, language_server::Error};
 use crate::types::SCRIPT_IDENTIFIER_PREFIX;
-use crate::{try_ensure_build, try_forward_text_document_position_params};
+use crate::{try_ensure_bundle, try_forward_text_document_position_params};
 
 pub fn proxy_completion(
     this: &mut Proxy,
@@ -11,7 +11,7 @@ pub fn proxy_completion(
 ) -> ResFut<R::Completion> {
     let mut s = this.server();
     let uri = &params.text_document_position.text_document.uri;
-    let build = try_ensure_build!(this, uri, params, completion);
+    let bundle = try_ensure_bundle!(this, uri, params, completion);
     let state = this.state.clone();
 
     Box::pin(async move {
@@ -22,11 +22,11 @@ pub fn proxy_completion(
             if item.label.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
                 return None;
             };
-            forward_build_completion_item(&mut item);
+            forward(&mut item);
             Some(item)
         };
 
-        try_forward_text_document_position_params!(state, build, doc_pos);
+        try_forward_text_document_position_params!(state, bundle, doc_pos);
 
         s.completion(params)
             .await
@@ -57,13 +57,13 @@ pub fn proxy_completion_item_resolve(
             .await
             .map_err(Error::internal)
             .map(|mut res| {
-                forward_build_completion_item(&mut res);
+                forward(&mut res);
                 res
             })
     })
 }
 
-fn forward_build_completion_item(item: &mut lsp::CompletionItem) {
+fn forward(item: &mut lsp::CompletionItem) {
     item.text_edit = None; // can't define context
     item.additional_text_edits = None;
     item.command = None;

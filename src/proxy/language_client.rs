@@ -1,8 +1,8 @@
 use async_lsp::lsp_types::{self as lsp, request as R};
 use async_lsp::{LanguageClient, ResponseError};
 
-use crate::proxy::language_server::forward_build_range;
-use crate::proxy::{Proxy, ResFut, language_server::Error};
+use crate::proxy::language_server::{Error, forward_build_range};
+use crate::proxy::{Proxy, ResFut};
 
 impl LanguageClient for Proxy {
     type Error = ResponseError;
@@ -36,23 +36,23 @@ impl LanguageClient for Proxy {
 
         let mut client = self.client();
         let state = self.state.clone();
-        let Some(build) = state.get_build_by_emit_uri(&params.uri) else {
-            tracing::warn!("build not found, fallback request...",);
+        let Some(bundle) = state.get_bundle_by_emit_uri(&params.uri) else {
+            tracing::warn!("{}", Error::unbuild_fallback());
             let _ = client.publish_diagnostics(params);
             return std::ops::ControlFlow::Continue(());
         };
 
-        let doc_of_build = state.get_doc_by_emit_uri(&params.uri).unwrap();
+        let doc = state.get_doc_by_emit_uri(&params.uri).unwrap();
         let project = state.get_project();
 
         let source_diagnostics = params.diagnostics.into_par_iter().filter_map(|d| {
             let mut range = d.range;
-            let Ok(source) = forward_build_range(&mut range, &build) else {
-                tracing::warn!("forward_build_range failed");
+            let Ok(source) = forward_build_range(&mut range, &bundle) else {
+                tracing::warn!("{}", Error::forward_failed());
                 return None;
             };
 
-            if source != *doc_of_build.source {
+            if source != *doc.source {
                 return None;
             }
 
@@ -77,11 +77,11 @@ impl LanguageClient for Proxy {
             let related_information = if let Some(related_information) = d.related_information {
                 let mut source_related_information = Vec::with_capacity(related_information.len());
                 for ri in related_information {
-                    let Some(build) = state.get_build_by_emit_uri(&ri.location.uri) else {
+                    let Some(bundle) = state.get_bundle_by_emit_uri(&ri.location.uri) else {
                         continue;
                     };
                     let mut source_ri_range = ri.location.range;
-                    let Ok(source) = forward_build_range(&mut source_ri_range, &build) else {
+                    let Ok(source) = forward_build_range(&mut source_ri_range, &bundle) else {
                         continue;
                     };
 
@@ -108,7 +108,7 @@ impl LanguageClient for Proxy {
 
         client
             .publish_diagnostics(lsp::PublishDiagnosticsParams::new(
-                state.path_to_uri(&doc_of_build.path).unwrap(),
+                state.path_to_uri(&doc.path).unwrap(),
                 source_diagnostics.collect(),
                 None,
             ))

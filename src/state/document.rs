@@ -27,16 +27,22 @@ impl State {
         } else {
             let source = Source::from_path(&path, self.get_project())?;
             let source_ident = DocumentIdentifier::new(&source);
-            let build_uri = {
-                // TODO: change to <project.join(PROXY_WORKSPACE)>/<source_path>/<source_hash.js>
+
+            let (bundle_uri, transpiled_doc_uri) = {
                 let proxy_ws = self.get_project().join(PROXY_WORKSPACE);
-                let emit_path = proxy_ws.join(format!("buffer.{}.js", source_ident.as_str()));
-                Uri::from_file_path(emit_path).map_err(|_| anyhow::anyhow!("build_uri failed"))?
+                let uri_fail = |_| anyhow::anyhow!("create uri failed");
+                let try_uri = |n: String| Uri::from_file_path(proxy_ws.join(n)).map_err(uri_fail);
+                let ident = source_ident.as_str();
+                let bundle_uri = try_uri(format!("bundle.{ident}.js"))?;
+                let transpiled_doc_uri = try_uri(format!("transpile.{ident}.js"))?;
+
+                (bundle_uri, transpiled_doc_uri)
             };
 
             let doc = Document {
                 path: path.clone().into(),
-                build_uri: build_uri.into(),
+                bundle_uri: bundle_uri.into(),
+                transpile_uri: transpiled_doc_uri.into(),
 
                 buffer: Rope::new(),
                 tokens: vec![].into(),
@@ -112,18 +118,18 @@ impl State {
 
     pub fn get_doc_by_emit_uri(&self, emit_uri: &Uri) -> Option<Document> {
         let emit_uri_canonicalized = emit_uri.try_canonicalize();
-        self.builds
+        self.doc_to_bundle
             .iter()
             .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
             .map(|e| self.get_doc(&self.path_to_uri(e.key()).unwrap()).unwrap())
     }
 
     pub fn get_current_doc(&self) -> Option<Uri> {
-        self.current_document.lock().unwrap().clone()
+        self.current_doc.lock().unwrap().clone()
     }
 
     pub fn set_current_doc(&self, source_uri: &Uri) {
-        let mut guard = self.current_document.lock().unwrap();
+        let mut guard = self.current_doc.lock().unwrap();
         *guard = Some(source_uri.try_canonicalize());
     }
 }

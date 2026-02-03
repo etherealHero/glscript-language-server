@@ -4,6 +4,7 @@ use async_lsp::{ErrorCode, LanguageServer, ResponseError, ServerSocket, lsp_type
 
 use crate::builder::Build;
 use crate::proxy::{DECL_FILE_EXT, JS_FILE_EXT, JS_LANG_ID, Proxy, ResFut};
+use crate::try_ensure_transpile;
 use crate::types::Source;
 
 mod common_features;
@@ -15,6 +16,7 @@ mod hover;
 mod lifecycle;
 mod references;
 mod selection_range;
+mod semantic_tokens;
 mod ws_symbol;
 
 pub type NotifyResult = std::ops::ControlFlow<async_lsp::Result<()>>;
@@ -40,6 +42,11 @@ impl Error {
     pub fn forward_failed() -> ResponseError {
         ResponseError::new(ErrorCode::REQUEST_FAILED, "Forward failed")
     }
+
+    pub fn unbuild_fallback() -> ResponseError {
+        let message = "Build not found, fallback request...";
+        ResponseError::new(ErrorCode::INTERNAL_ERROR, message)
+    }
 }
 
 pub fn forward_build_range(range: &mut lsp::Range, build: &Build) -> Result<Source, ResponseError> {
@@ -63,11 +70,16 @@ pub fn definition_params(uri: Uri, pos: lsp::Position) -> lsp::GotoDefinitionPar
     }
 }
 
-pub fn first_did_open(s: &mut ServerSocket, uri: &Uri, text: &str) -> Result<(), ResponseError> {
-    s.did_open(lsp::DidOpenTextDocumentParams {
-        text_document: lsp::TextDocumentItem::new(uri.clone(), JS_LANG_ID.into(), 1, text.into()),
-    })
-    .map_err(Error::request_failed)
+pub fn did_open(
+    s: &mut ServerSocket,
+    uri: &Uri,
+    text: &str,
+    version: Option<i32>,
+) -> Result<(), ResponseError> {
+    let (lang, version, text) = (JS_LANG_ID.into(), version.unwrap_or(1), text.into());
+    let text_document = lsp::TextDocumentItem::new(uri.clone(), lang, version, text);
+    let open = s.did_open(lsp::DidOpenTextDocumentParams { text_document });
+    open.map_err(Error::request_failed)
 }
 
 pub fn did_close(s: &mut ServerSocket, uri: &Uri) -> Result<(), ResponseError> {
@@ -116,7 +128,9 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::DocumentSymbolRequest, _>(doc_symbol::proxy_document_symbol)
         .request::<R::WorkspaceSymbolRequest, _>(ws_symbol::proxy_symbol)
         .request::<R::WorkspaceSymbolResolve, _>(ws_symbol::proxy_workspace_symbol_resolve)
-        .request::<R::FoldingRangeRequest, _>(common_features::proxy_folding_range);
+        .request::<R::FoldingRangeRequest, _>(common_features::proxy_folding_range)
+        .request::<R::SemanticTokensFullRequest, _>(semantic_tokens::proxy_semantic_tokens_full)
+        .request::<R::Formatting, _>(Proxy::formatting);
     router
 }
 
@@ -135,8 +149,12 @@ impl LanguageServer for Proxy {
         Box::pin(async move { req.await })
     }
 
-    fn formatting(&mut self, _: lsp::DocumentFormattingParams) -> ResFut<R::Formatting> {
-        todo!()
+    // FIXME: forward text edit on transpiled stmt
+    fn formatting(&mut self, mut params: lsp::DocumentFormattingParams) -> ResFut<R::Formatting> {
+        let mut s = self.server();
+        let transpile = try_ensure_transpile!(self, &params.text_document.uri, params, formatting);
+        params.text_document.uri = transpile.uri.clone();
+        Box::pin(async move { s.formatting(params).await.map_err(Error::internal) })
     }
 
     fn range_formatting(
@@ -171,7 +189,7 @@ impl LanguageServer for Proxy {
             state.create_progress(&mut client).await;
             state.send_progress(&mut client, (0, 0), "tsserver request declaration"); // for workspace search
             let res = req.await.map(|res| {
-                let is_source = |l: &lsp::Location| state.get_build_by_emit_uri(&l.uri).is_none();
+                let is_source = |l: &lsp::Location| state.get_bundle_by_emit_uri(&l.uri).is_none();
                 res.map(|locations| locations.into_iter().filter(is_source).collect())
             });
             state.destroy_progress(&mut client);

@@ -1,7 +1,7 @@
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
-use crate::proxy::language_server::{Error, NotifyResult, first_did_open};
+use crate::proxy::language_server::{Error, NotifyResult};
 use crate::proxy::{PROXY_WORKSPACE, Proxy, ResFut};
 
 pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut<R::Initialize> {
@@ -23,9 +23,10 @@ pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut
 
         this.state.initialize_project(&root_ws.uri);
 
-        let _ = std::fs::File::create_new(this.state.get_default_doc().to_file_path().unwrap());
+        let default_doc = this.state.get_default_doc();
+        let _ = std::fs::File::create_new(default_doc.to_file_path().unwrap());
 
-        this.state.set_build(&this.state.get_default_doc()).unwrap();
+        this.state.set_bundle(&default_doc).unwrap();
 
         root_ws.uri = Uri::from_directory_path(proxy_ws_dir).unwrap();
     }
@@ -42,8 +43,6 @@ pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut
 
 pub fn initialized(this: &mut Proxy, params: lsp::InitializedParams) -> NotifyResult {
     let _ = this.server().initialized(params);
-    let transpiled_uri = this.state.get_active_transpiled_buffer();
-    first_did_open(&mut this.server(), &transpiled_uri, "").unwrap();
     std::ops::ControlFlow::Continue(())
 }
 

@@ -74,23 +74,45 @@ impl Proxy {
 }
 
 #[macro_export]
-macro_rules! try_ensure_build {
+macro_rules! try_ensure_bundle {
     (
         $self:expr,
         $uri:expr,
         $params:expr,
         $method:ident
     ) => {{
-        if let Some(build) = $self.state.get_build($uri) {
-            $self.state.commit_build_changes($uri, &mut $self.server());
-            build
+        if let Some(bundle) = $self.state.get_bundle($uri) {
+            $self.state.commit_changes($uri, &mut $self.server());
+            bundle
         } else {
-            tracing::warn!("build not found, fallback request...");
+            use $crate::proxy::language_server::Error;
+            tracing::warn!("{}", Error::unbuild_fallback());
             let mut service = $self.server();
-            return Box::pin(async move {
-                use $crate::proxy::language_server::Error;
-                service.$method($params).await.map_err(Error::internal)
-            });
+            return Box::pin(
+                async move { service.$method($params).await.map_err(Error::internal) },
+            );
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! try_ensure_transpile {
+    (
+        $self:expr,
+        $uri:expr,
+        $params:expr,
+        $method:ident
+    ) => {{
+        if let Some(transpile) = $self.state.get_transpile($uri) {
+            $self.state.commit_changes($uri, &mut $self.server());
+            transpile
+        } else {
+            use $crate::proxy::language_server::Error;
+            tracing::warn!("{}", Error::unbuild_fallback());
+            let mut service = $self.server();
+            return Box::pin(
+                async move { service.$method($params).await.map_err(Error::internal) },
+            );
         }
     }};
 }

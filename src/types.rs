@@ -19,7 +19,8 @@ pub struct BuildWithVersion {
 #[derive(Debug, Clone)]
 pub struct Document {
     pub path: Arc<PathBuf>,
-    pub build_uri: Arc<Uri>,
+    pub bundle_uri: Arc<Uri>,
+    pub transpile_uri: Arc<Uri>,
 
     pub source: Arc<Source>,
     pub source_hash: SourceHash,

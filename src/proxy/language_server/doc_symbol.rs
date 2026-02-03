@@ -4,7 +4,7 @@ use async_lsp::{LanguageServer, lsp_types as lsp};
 use crate::builder::Build;
 use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
-use crate::try_ensure_build;
+use crate::try_ensure_transpile;
 use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 
 #[tracing::instrument(skip_all)]
@@ -14,25 +14,20 @@ pub fn proxy_document_symbol(
 ) -> ResFut<R::DocumentSymbolRequest> {
     let mut s = this.server();
     let uri = &params.text_document.uri;
-    try_ensure_build!(this, uri, params, document_symbol);
-    let state = this.state.clone();
-    let req_uri = params.text_document.uri.clone();
+    let transpile = try_ensure_transpile!(this, uri, params, document_symbol);
 
-    params.text_document.uri = state.get_active_transpiled_buffer();
+    params.text_document.uri = transpile.uri.clone();
 
     Box::pin(async move {
-        let transpiled_doc = &state.transpile_doc(&req_uri).unwrap();
-        let changes = state.set_active_transpiled_buffer(&transpiled_doc.content);
-
-        s.did_change(changes).unwrap();
-
         match s.document_symbol(params).await.map_err(Error::internal) {
             Ok(Some(lsp::DocumentSymbolResponse::Nested(symbols))) => {
-                let source_symbols = forward(&Some(symbols), transpiled_doc);
+                let source_symbols = forward(&Some(symbols), &transpile);
                 let source_symbols = source_symbols.unwrap_or_default();
                 Ok(Some(lsp::DocumentSymbolResponse::Nested(source_symbols)))
             }
-            Ok(Some(_)) => Err(Error::forward_failed()),
+            Ok(Some(lsp::DocumentSymbolResponse::Flat(s))) if !s.is_empty() => {
+                Err(Error::forward_failed())
+            }
             Ok(res) => Ok(res),
             Err(err) => Err(err),
         }

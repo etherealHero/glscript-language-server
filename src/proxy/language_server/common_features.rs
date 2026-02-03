@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
-use crate::proxy::language_server::{Error, NotifyResult, forward_build_range, references_params};
+use crate::proxy::language_server::{Error, NotifyResult};
+use crate::proxy::language_server::{forward_build_range, references_params};
 use crate::proxy::{Proxy, ResFut};
-use crate::{try_ensure_build, try_forward_text_document_position_params};
+use crate::try_forward_text_document_position_params;
+use crate::{try_ensure_bundle, try_ensure_transpile};
 
 pub fn proxy_signature_help(
     this: &mut Proxy,
@@ -13,11 +15,11 @@ pub fn proxy_signature_help(
 ) -> ResFut<R::SignatureHelpRequest> {
     let mut s = this.server();
     let uri = &params.text_document_position_params.text_document.uri;
-    let build = try_ensure_build!(this, uri, params, signature_help);
+    let bundle = try_ensure_bundle!(this, uri, params, signature_help);
     let state = this.state.clone();
     Box::pin(async move {
         let doc_pos = &mut params.text_document_position_params;
-        try_forward_text_document_position_params!(state, build, doc_pos);
+        try_forward_text_document_position_params!(state, bundle, doc_pos);
         s.signature_help(params).await.map_err(Error::internal)
     })
 }
@@ -30,7 +32,7 @@ pub fn proxy_cancel_request(this: &mut Proxy, _: lsp::CancelParams) -> NotifyRes
 pub fn proxy_rename(this: &mut Proxy, params: lsp::RenameParams) -> ResFut<R::Rename> {
     let uri = &params.text_document_position.text_document.uri;
     let pos = params.text_document_position.position;
-    try_ensure_build!(this, uri, params, rename);
+    try_ensure_bundle!(this, uri, params, rename);
     let references_request = this.references(references_params(uri.clone(), pos));
     Box::pin(async move {
         let refs = references_request.await;
@@ -61,13 +63,13 @@ pub fn proxy_prepare_rename(
 ) -> ResFut<R::PrepareRenameRequest> {
     let mut s = this.server();
     let uri = &params.text_document.uri;
-    let build = try_ensure_build!(this, uri, params, prepare_rename);
+    let bundle = try_ensure_bundle!(this, uri, params, prepare_rename);
     let state = this.state.clone();
     Box::pin(async move {
-        try_forward_text_document_position_params!(state, build, params);
+        try_forward_text_document_position_params!(state, bundle, params);
         let mut res = s.prepare_rename(params).await.map_err(Error::internal);
         if let Ok(Some(lsp::PrepareRenameResponse::Range(ref mut r))) = res {
-            forward_build_range(r, &build)?;
+            forward_build_range(r, &bundle)?;
         }
         res
     })
@@ -80,9 +82,7 @@ pub fn proxy_folding_range(
 ) -> ResFut<R::FoldingRangeRequest> {
     let mut s = this.server();
     let uri = &params.text_document.uri;
-    try_ensure_build!(this, uri, params, folding_range);
-    let state = this.state.clone();
-    let req_uri = params.text_document.uri.clone();
+    let transpile = try_ensure_transpile!(this, uri, params, folding_range);
     let get_range = |f: &lsp::FoldingRange, text: &str| {
         let start_ch = || text.lines().next().unwrap_or_default().len() as u32;
         let end_ch = || text.lines().last().unwrap_or_default().len() as u32;
@@ -92,19 +92,14 @@ pub fn proxy_folding_range(
         )
     };
 
-    params.text_document.uri = state.get_active_transpiled_buffer();
+    params.text_document.uri = transpile.uri.clone();
 
     Box::pin(async move {
-        let transpiled_doc = &state.transpile_doc(&req_uri).unwrap();
-        let changes = state.set_active_transpiled_buffer(&transpiled_doc.content);
-
-        s.did_change(changes).unwrap();
-
         let mut res = s.folding_range(params).await.map_err(Error::internal);
         if let Ok(Some(ref mut foldings)) = res {
             for f in foldings {
-                let mut range = get_range(f, &transpiled_doc.content);
-                forward_build_range(&mut range, transpiled_doc).unwrap();
+                let mut range = get_range(f, &transpile.content);
+                forward_build_range(&mut range, &transpile).unwrap();
                 f.start_line = range.start.line;
                 f.start_character = range.start.character.into();
                 f.end_line = range.end.line;

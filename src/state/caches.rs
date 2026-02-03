@@ -10,7 +10,7 @@ impl State {
     /// returns canonicalized [`PathBuf`]
     #[inline]
     pub fn uri_to_path(&self, uri: &Uri) -> anyhow::Result<PathBuf> {
-        if let Some(canonicalized_path) = self.uri_to_path.get(uri) {
+        if let Some(canonicalized_path) = self.uri_to_canonicalized_path.get(uri) {
             return Ok(canonicalized_path.clone());
         }
 
@@ -18,7 +18,7 @@ impl State {
         let path = path.map_err(|_| anyhow::anyhow!("uri to file path fail: {uri}"))?;
         let canonicalized_path = dunce::canonicalize(dunce::simplified(&path))?;
 
-        self.uri_to_path
+        self.uri_to_canonicalized_path
             .insert(uri.clone(), canonicalized_path.clone());
 
         Ok(canonicalized_path)
@@ -27,7 +27,7 @@ impl State {
     /// returns canonicalized [`Uri`]
     #[inline]
     pub fn path_to_uri(&self, path: &Path) -> anyhow::Result<Uri> {
-        if let Some(canonicalized_uri) = self.path_to_uri.get(path) {
+        if let Some(canonicalized_uri) = self.path_to_canonicalized_uri.get(path) {
             return Ok(canonicalized_uri.clone());
         }
 
@@ -36,7 +36,7 @@ impl State {
         let uri = uri.map_err(|_| anyhow::anyhow!("path to uri fail: {path:?}"))?;
         let canonicalized_uri = uri.canonicalize()?;
 
-        self.path_to_uri
+        self.path_to_canonicalized_uri
             .insert(path.to_path_buf(), canonicalized_uri.clone());
 
         Ok(canonicalized_uri)

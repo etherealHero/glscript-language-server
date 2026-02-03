@@ -3,118 +3,150 @@ use std::path::PathBuf;
 use async_lsp::lsp_types::Url as Uri;
 use async_lsp::{LanguageServer, ServerSocket, lsp_types as lsp};
 
-use crate::state::State;
+use crate::builder::Build;
+use crate::state::{State, UnforwardedBuildChanges};
+use crate::types::BuildWithVersion;
+
+type ChangeEvent = lsp::TextDocumentContentChangeEvent;
+type Ident = lsp::VersionedTextDocumentIdentifier;
 
 /// Lazy build changes
 impl State {
     /// Flow:
     /// 1. client change buffer
-    /// 2. changes save in state by [`State::add_client_doc_changes`]
-    /// 3. state starts pull changes by [`State::commit_build_changes`] with stack unwinding
+    /// 2. changes save in state by [`State::add_changes`]
+    /// 3. state starts pull changes by [`State::commit_changes`] with stack unwinding
     ///    where client call some request
-    pub fn add_client_doc_changes(
+    pub fn add_changes(
         &self,
         doc_path: PathBuf,
-        client_doc_changes: lsp::DidChangeTextDocumentParams,
+        doc_changes: lsp::DidChangeTextDocumentParams,
         transpile_changed: bool,
     ) {
         self.unforwarded_doc_changes
             .entry(doc_path)
-            .and_modify(|c| c.push((client_doc_changes.to_owned(), transpile_changed)))
-            .or_insert(vec![(client_doc_changes, transpile_changed)]);
+            .and_modify(|c| c.push((doc_changes.to_owned(), transpile_changed)))
+            .or_insert(vec![(doc_changes, transpile_changed)]);
     }
 
-    fn forward_client_doc_changes(&self) {
+    fn forward(&self) {
         use rayon::prelude::*;
 
         self.unforwarded_doc_changes.par_iter().for_each(|entry| {
             let (path, changes) = (entry.key(), entry.value());
             let doc_uri = &self.path_to_uri(path).unwrap();
-            for (client_params, transpile_changed) in changes {
-                let client_params_doc = self.get_doc(&client_params.text_document.uri).unwrap();
-                let client_params_doc_source = client_params_doc.source;
-
-                let build_of_doc = self.get_build(doc_uri).unwrap();
-                let mut forward_changes = Vec::with_capacity(client_params.content_changes.len());
+            for (doc_changes, transpile_changed) in changes {
                 let transpile_changed = *transpile_changed;
 
-                for change in &client_params.content_changes {
-                    if transpile_changed {
-                        break;
-                    }
+                let t = self.get_transpile(doc_uri).unwrap();
+                let b = self.get_bundle(doc_uri).unwrap();
 
-                    if change.range.is_none() {
-                        continue;
-                    }
+                let changes_t = self.forward_changes(&t, doc_changes, transpile_changed);
+                let changes_b = self.forward_changes(&b, doc_changes, transpile_changed);
 
-                    match build_of_doc
-                        .forward_src_range(&change.range.unwrap(), &client_params_doc_source)
-                    {
-                        Some(r) => forward_changes.push(lsp::TextDocumentContentChangeEvent {
-                            range: Some(r),
-                            range_length: change.range_length,
-                            text: change.text.clone(),
-                        }),
-                        None => return, // FIXME: sync docs failed
-                    };
-                }
+                let new_t = self.set_transpile(doc_uri).unwrap();
+                let new_b = self.set_bundle(doc_uri).unwrap();
 
-                let new_build_of_doc_with_version = self.set_build(doc_uri).unwrap();
-                let forward_params = lsp::DidChangeTextDocumentParams {
-                    text_document: lsp::VersionedTextDocumentIdentifier {
-                        uri: new_build_of_doc_with_version.build.uri.clone(),
-                        version: new_build_of_doc_with_version.version,
-                    },
-                    content_changes: if transpile_changed {
-                        vec![lsp::TextDocumentContentChangeEvent {
-                            text: new_build_of_doc_with_version.build.content.clone(),
-                            range_length: None,
-                            range: None,
-                        }]
-                    } else {
-                        forward_changes
-                    },
-                };
+                let params_b = self.forward_params(changes_b, &new_b, transpile_changed);
+                let params_t = self.forward_params(changes_t, &new_t, transpile_changed);
 
-                self.add_build_changes(doc_uri, forward_params);
+                self.add_forwarded_changes(doc_uri, params_b, &self.uncommitted_bundle_changes);
+                self.add_forwarded_changes(doc_uri, params_t, &self.uncommitted_transpile_changes);
             }
         });
 
         self.unforwarded_doc_changes.clear();
     }
 
-    fn add_build_changes(
+    fn forward_changes(
+        &self,
+        build: &Build,
+        doc_changes: &lsp::DidChangeTextDocumentParams,
+        transpile_changed: bool,
+    ) -> Vec<lsp::TextDocumentContentChangeEvent> {
+        let doc = self.get_doc(&doc_changes.text_document.uri).unwrap();
+        let mut build_changes = Vec::with_capacity(doc_changes.content_changes.len());
+
+        for change in &doc_changes.content_changes {
+            if transpile_changed {
+                break;
+            }
+
+            let Some(range) = &change.range else {
+                continue;
+            };
+
+            match build.forward_src_range(range, &doc.source) {
+                Some(r) => build_changes.push(ChangeEvent {
+                    range: Some(r),
+                    range_length: change.range_length,
+                    text: change.text.clone(),
+                }),
+                None => continue, // FIXME: sync docs failed
+            };
+        }
+
+        build_changes
+    }
+
+    fn forward_params(
+        &self,
+        fc: Vec<ChangeEvent>,
+        b: &BuildWithVersion,
+        transpile_changed: bool,
+    ) -> lsp::DidChangeTextDocumentParams {
+        let full = || ChangeEvent {
+            text: b.build.content.clone(),
+            range_length: None,
+            range: None,
+        };
+        lsp::DidChangeTextDocumentParams {
+            text_document: Ident::new(b.build.uri.clone(), b.version),
+            content_changes: if transpile_changed { vec![full()] } else { fc },
+        }
+    }
+
+    fn add_forwarded_changes(
         &self,
         source_uri: &Uri,
         forward_changes: lsp::DidChangeTextDocumentParams,
+        storage: &UnforwardedBuildChanges,
     ) {
         let path = self.uri_to_path(source_uri).unwrap();
-        self.uncommitted_build_changes
+        let modify = |c: &mut Vec<lsp::DidChangeTextDocumentParams>| {
+            let one_change = forward_changes.content_changes.len() == 1;
+            let change = forward_changes.content_changes.first();
+            let whole_buffer = change.as_ref().and_then(|c| c.range).is_none();
+            if one_change && whole_buffer {
+                c.clear();
+            }
+            c.push(forward_changes.to_owned())
+        };
+
+        storage
             .entry(path)
-            .and_modify(|c| {
-                let one_change = forward_changes.content_changes.len() == 1;
-                let change = forward_changes.content_changes.first();
-                let whole_buffer = change.as_ref().and_then(|c| c.range).is_none();
-                if one_change && whole_buffer {
-                    c.clear();
-                }
-                c.push(forward_changes.to_owned())
-            })
+            .and_modify(modify)
             .or_insert(vec![forward_changes]);
     }
 
-    pub fn commit_build_changes(&self, source_uri: &Uri, service: &mut ServerSocket) {
-        let path = match self.uri_to_path(source_uri) {
-            Ok(p) => p,
-            Err(_) => return,
+    pub fn commit_changes(&self, source_uri: &Uri, s: &mut ServerSocket) {
+        let Ok(path) = self.uri_to_path(source_uri) else {
+            return;
         };
 
-        self.forward_client_doc_changes();
+        let commit = |s: &mut ServerSocket, storage: &UnforwardedBuildChanges| {
+            let Some(changes) = storage.remove(&path).map(|e| e.1) else {
+                return;
+            };
 
-        if let Some((_, changes)) = self.uncommitted_build_changes.remove(&path) {
             for change in changes {
-                let _ = service.did_change(change);
+                let _ = s.did_change(change);
             }
-        }
+        };
+
+        self.forward();
+
+        commit(s, &self.uncommitted_bundle_changes);
+        commit(s, &self.uncommitted_transpile_changes);
     }
 }
