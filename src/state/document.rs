@@ -6,7 +6,7 @@ use async_lsp::lsp_types as lsp;
 use async_lsp::lsp_types::Url as Uri;
 use ropey::Rope;
 
-use crate::parser::{Token, parse};
+use crate::parser::{Parse, parse};
 use crate::proxy::{Canonicalize, PROXY_WORKSPACE};
 use crate::state::State;
 use crate::types::{Document, DocumentDeclarationStatement, DocumentLinkStatement};
@@ -45,8 +45,8 @@ impl State {
                 transpile_uri: transpiled_doc_uri.into(),
 
                 buffer: Rope::new(),
-                tokens: vec![].into(),
-                content: String::new().into(),
+                parse: Parse::default().into(),
+                parse_content: String::new().into(),
                 transpile_hash: (&vec![], None).into(),
 
                 decl_stmt: DocumentDeclarationStatement::create(&source, &source_ident).into(),
@@ -63,18 +63,17 @@ impl State {
         let patch_doc_content = |doc: &mut RefMut<'_>, content: &str| {
             let content = Arc::new(content.to_string());
             let content_ref = content.clone();
-            let tokens = parse(&content_ref);
-            let tokens = unsafe { transmute::<Vec<Token<'_>>, Vec<Token<'static>>>(tokens) };
+            let parse = unsafe { transmute::<Parse<'_>, Parse<'static>>(parse(&content_ref)) };
 
-            doc.tokens = tokens.into();
-            doc.content = content;
+            doc.parse = parse.into();
+            doc.parse_content = content;
         };
 
         if changes.len() == 1 && changes[0].range.is_none() {
             let new_text = changes[0].text.as_str();
             doc.buffer = Rope::from_str(new_text);
             patch_doc_content(&mut doc, new_text);
-            doc.transpile_hash = (doc.tokens.as_ref(), None).into();
+            doc.transpile_hash = (doc.parse.compressed_tokens.as_ref(), None).into();
             return Ok(());
         }
 
@@ -90,7 +89,7 @@ impl State {
 
         let full_text = &doc.buffer.to_string();
         patch_doc_content(&mut doc, full_text);
-        doc.transpile_hash = (doc.tokens.as_ref(), changes.into()).into();
+        doc.transpile_hash = (doc.parse.compressed_tokens.as_ref(), changes.into()).into();
         Ok(())
     }
 

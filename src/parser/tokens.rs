@@ -1,17 +1,4 @@
-mod grammar {
-    use faster_pest::*;
-
-    #[derive(Parser)]
-    #[grammar = "src/parser/glscript_subset_grammar.pest"]
-    pub struct GlScriptSubsetGrammar;
-}
-
 use derive_more::{Constructor, From};
-pub use grammar::{GlScriptSubsetGrammar, Ident, Rule};
-
-#[allow(unused)]
-pub type Pair<'a> = faster_pest::Pair2<'a, Ident<'a>>;
-pub type Pairs<'a> = faster_pest::Pairs2<'a, Ident<'a>>;
 
 #[derive(Debug)]
 pub enum Token<'a> {

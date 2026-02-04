@@ -296,7 +296,7 @@ impl Emit {
             Ok(doc) => doc,
             Err(_) => return,
         };
-        let (path, tokens) = (&d.path, d.tokens.iter());
+        let (path, tokens) = (&d.path, d.parse.compressed_tokens.iter());
         match ctx.visited_sources.contains(&d.source_hash) {
             true => return,
             false => ctx.visited_sources.insert(d.source_hash),
@@ -386,7 +386,7 @@ impl Emit {
             Ok(doc) => doc,
             Err(_) => return,
         };
-        let (source, path, tokens) = (&d.source, &d.path, d.tokens.iter());
+        let (source, path, tokens) = (&d.source, &d.path, d.parse.compressed_tokens.iter());
         let src_id = st.add_source(source.clone());
 
         match ctx.visited_sources.contains(&d.source_hash) {
@@ -544,7 +544,7 @@ impl Emit {
             source: p.source == d.source_hash,
             literal: p.source == d.source_hash,
         });
-        let (path, tokens, decl_stmt) = (&d.path, d.tokens.iter(), &d.decl_stmt);
+        let (path, tokens, decl_stmt) = (&d.path, d.parse.compressed_tokens.iter(), &d.decl_stmt);
 
         match ctx.visited_sources.contains(&d.source_hash) {
             true => return None,

@@ -26,6 +26,7 @@ pub struct State {
     work_done_progress_token: Arc<OnceLock<lsp::NumberOrString>>,
 
     project: Arc<OnceLock<PathBuf>>,
+    token_types_capabilities: Arc<OnceLock<Vec<lsp::SemanticTokenType>>>,
     documents: DashMap<PathBuf, Document>,
     current_doc: Arc<Mutex<Option<Uri>>>,
     doc_to_bundle: DashMap<PathBuf, BuildWithVersion>,
@@ -42,10 +43,18 @@ pub struct State {
 
 /// State of configuration
 impl State {
-    pub fn initialize_project(&self, source_uri: &Uri) {
+    pub fn initialize_project(
+        &self,
+        source_uri: &Uri,
+        token_types: Option<Vec<lsp::SemanticTokenType>>,
+    ) {
         let path = self.uri_to_path(source_uri).unwrap();
         let msg = "project initialize once";
         let ident = lsp::NumberOrString::String("glscript".into());
+
+        if let Some(types) = token_types {
+            self.token_types_capabilities.set(types).expect(msg);
+        }
 
         self.project.set(path).expect(msg);
         self.work_done_progress_token.set(ident).expect(msg);
@@ -61,5 +70,9 @@ impl State {
         let default_doc = self.path_to_uri(&path);
 
         default_doc.unwrap_or(Uri::from_file_path(path).unwrap().canonicalize().unwrap())
+    }
+
+    pub fn get_token_types_capabilities(&self) -> Option<&Vec<lsp::SemanticTokenType>> {
+        self.token_types_capabilities.get()
     }
 }

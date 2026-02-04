@@ -44,10 +44,10 @@ pub fn proxy_symbol(
     })
 }
 
+#[tracing::instrument(skip_all)]
 pub fn proxy_workspace_symbol_resolve(
     _this: &mut Proxy,
     params: lsp::WorkspaceSymbol,
 ) -> ResFut<R::WorkspaceSymbolResolve> {
-    tracing::info!("{params:#?}");
     Box::pin(async move { Ok(params) })
 }

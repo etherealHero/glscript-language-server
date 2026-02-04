@@ -1,11 +1,19 @@
-use tokens::{GlScriptSubsetGrammar, Rule};
-use tokens::{Pairs, PathLiteral, Pending, RawToken, Span};
+use derive_more::Constructor;
+use entry::{Rule, get_pairs};
+use tokens::{PathLiteral, Pending, RawToken, Span};
 
 pub use tokens::{LineCol, Token};
 
+mod entry;
 mod tokens;
 
-pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
+#[derive(Constructor, Debug, Default)]
+pub struct Parse<'a> {
+    pub compressed_tokens: Vec<Token<'a>>,
+    pub str_lit_injections: Vec<LineCol>, // TODO:
+}
+
+pub fn parse<'a>(raw_text: &'a str) -> Parse<'a> {
     let raw_text_ptr = raw_text.as_ptr() as usize;
     let pairs = get_pairs(raw_text);
     let (mut line, mut offset, mut pending) = (0, 0, None::<Pending>);
@@ -14,16 +22,13 @@ pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
     for ref pair in pairs {
         let (rule, pair_str) = (pair.as_rule(), pair.as_str());
         let pair_len = pair_str.len() as u32;
-        let emit_span = || Span::new((line, offset).into(), pair_len);
         let pos = unsafe { (pair_str.as_ptr() as usize).unchecked_sub(raw_text_ptr) };
-        let emit_token = || {
-            let text = unsafe { raw_text.get_unchecked(pos..pos + pair_len as usize) };
-            RawToken::new((line, offset).into(), text)
-        };
-        let emit_path_literal = || {
-            let path = unsafe { raw_text.get_unchecked(pos + 1..pos + pair_len as usize - 1) };
-            PathLiteral::new((line, offset).into(), path)
-        };
+        let lc = || LineCol { line, col: offset };
+
+        let emit_span = || Span::new(lc(), pair_len);
+        let emit_token = || RawToken::new(lc(), &raw_text[pos..pos + pair_len as usize]);
+        let emit_pl = || PathLiteral::new(lc(), &raw_text[pos + 1..pos + pair_len as usize - 1]);
+
         let uncommon_stmt = matches!(
             rule,
             Rule::IncludeToken | Rule::IncludePath | Rule::RegionOpen | Rule::RegionClose
@@ -41,15 +46,15 @@ pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
                     out.push(p.flush(raw_text));
                 }
             }
-            Rule::LineTerminator => out.push(Token::LineTerminator((line, offset).into())),
+            Rule::LineTerminator => out.push(Token::LineTerminator(lc())),
             Rule::CommonWithLineEnding => out.push(Token::CommonWithLineEnding(emit_token())),
             Rule::IncludeToken => out.push(Token::Include(emit_span())),
-            Rule::IncludePath => out.push(Token::IncludePath(emit_path_literal())),
+            Rule::IncludePath => out.push(Token::IncludePath(emit_pl())),
             Rule::RegionOpen => out.push(Token::RegionOpen(emit_span())),
             Rule::RegionClose => out.push(Token::RegionClose(emit_span())),
             _ => match pending {
                 Some(ref mut acc) if acc.init_line_col.line == line => acc.pending_len += pair_len,
-                _ => pending = Pending::new((line, offset).into(), pos, pair_len, false).into(),
+                _ => pending = Pending::new(lc(), pos, pair_len, false).into(),
             },
         };
 
@@ -76,35 +81,5 @@ pub fn parse<'a>(raw_text: &'a str) -> Vec<Token<'a>> {
     };
 
     out.push(Token::Eoi(end_of_input));
-    out
-}
-
-fn get_pairs<'a>(raw_text: &'a str) -> Pairs<'a> {
-    let pairs = parse_raw_text(Rule::SourceFileFast, raw_text);
-    let (mut pos, mut ok) = (0, true);
-
-    for p in pairs.clone() {
-        let s = p.as_span().as_str();
-        let end = pos + s.len();
-
-        if raw_text.get(pos..end) != Some(s) {
-            ok = false;
-            break;
-        }
-
-        pos = end;
-    }
-
-    match ok && pos == raw_text.len() {
-        true => pairs,
-        false => parse_raw_text(Rule::SourceFile, raw_text), // fallback
-    }
-}
-
-fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> Pairs<'_> {
-    GlScriptSubsetGrammar::parse(entry_rule, raw_text)
-        .unwrap()
-        .next()
-        .unwrap()
-        .into_inner()
+    Parse::new(out, vec![])
 }

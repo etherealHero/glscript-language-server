@@ -181,7 +181,7 @@ fn get_unopened_documents(
                 return None;
             }
             let matched = match uri.as_ref().and_then(|u| state.get_doc(u).ok()) {
-                Some(doc) => doc.content.contains(&def_lit),
+                Some(doc) => doc.parse_content.contains(&def_lit),
                 None => file_contains_text(p, &def_lit).ok()?,
             };
             if !matched

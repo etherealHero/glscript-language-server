@@ -5,7 +5,9 @@ use rayon::prelude::*;
 
 use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
+use crate::state::State;
 use crate::try_ensure_transpile;
+use crate::types::Document;
 
 // TODO: add %param str injection, mono-highlight regions (with provided option)
 /// wiki:
@@ -19,6 +21,8 @@ pub fn proxy_semantic_tokens_full(
     let mut s = this.server();
     let uri = &params.text_document.uri;
     let transpile = try_ensure_transpile!(this, uri, params, semantic_tokens_full);
+    let st = this.state.clone();
+    let extra_tokens = extra_tokens(st.get_doc(uri).unwrap(), &st);
 
     params.text_document.uri = transpile.uri.clone();
 
@@ -40,18 +44,61 @@ pub fn proxy_semantic_tokens_full(
             let token = AbsoluteSemanticToken::new(range, t.token_type, t.token_modifiers_bitset);
             Some(token)
         });
+        let source_tokens = source_tokens.collect();
+        let source_tokens = enrich_tokens(source_tokens, extra_tokens);
 
-        let data = encode(source_tokens.collect());
-        tracing::info!("semantic_tokens({})", data.len());
+        // tracing::info!("source_tokens: {:#?}", source_tokens);
+        // tracing::info!("token_types: {:#?}", st.get_token_types_capabilities());
+
+        let data = encode(source_tokens);
         let semantic_tokens = SemanticTokens { result_id, data };
         Ok(Some(SR::Tokens(semantic_tokens)))
     })
 }
 
-/// each pos has one line because semantic token cannot be multiline
-type StartPosWithEndCharacter = (lsp::Position, u32);
+fn extra_tokens(doc: Document, st: &State) -> Vec<AbsoluteSemanticToken> {
+    let Some(token_types) = st.get_token_types_capabilities() else {
+        return vec![];
+    };
 
-#[derive(Constructor)]
+    let Some(id) = token_types
+        .iter()
+        .enumerate()
+        .find(|(_, t)| **t == lsp::SemanticTokenType::PARAMETER)
+        .map(|e| e.0 as u32)
+    else {
+        return vec![];
+    };
+
+    doc.parse
+        .str_lit_injections
+        .iter()
+        .map(|t| AbsoluteSemanticToken::new((lsp::Position::new(t.line, t.col), t.col + 2), id, 0))
+        .collect()
+}
+
+fn enrich_tokens(
+    mut this: Vec<AbsoluteSemanticToken>,
+    other: Vec<AbsoluteSemanticToken>,
+) -> Vec<AbsoluteSemanticToken> {
+    let non_intersect_other = other.into_par_iter().filter_map(|o| {
+        let r_o = lsp::Range::new(o.range.0, lsp::Position::new(o.range.0.line, o.range.1));
+        let intersect = this.iter().any(|t| {
+            let r_a = lsp::Range::new(t.range.0, lsp::Position::new(t.range.0.line, t.range.1));
+            r_o.start <= r_a.end && r_a.start <= r_o.end
+        });
+        if intersect { None } else { Some(o) }
+    });
+
+    this.append(&mut non_intersect_other.collect::<Vec<_>>());
+    this.sort_by(|a, b| a.range.0.cmp(&b.range.0));
+    this
+}
+
+/// each pos has one line because semantic token cannot be multiline
+type StartPosWithEndCharacter = (lsp::Position, u32); // start pos & end_character
+
+#[derive(Constructor, Debug)]
 struct AbsoluteSemanticToken {
     range: StartPosWithEndCharacter,
     token_type: u32,

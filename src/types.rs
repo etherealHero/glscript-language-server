@@ -7,7 +7,7 @@ use derive_more::{Constructor, Deref, Display, From, Into};
 use sha2::{Digest, Sha256};
 
 use crate::builder::Build;
-use crate::parser::Token;
+use crate::parser::{Parse, Token};
 use crate::state::State;
 
 #[derive(Debug, Clone, Constructor)]
@@ -25,11 +25,9 @@ pub struct Document {
     pub source: Arc<Source>,
     pub source_hash: SourceHash,
 
-    #[allow(unused)]
-    /// need for tokens lifetime
-    pub content: Arc<String>,
+    pub parse: Arc<Parse<'static>>,
+    pub parse_content: Arc<String>, // needs for parse static lifetime
     pub buffer: ropey::Rope,
-    pub tokens: Arc<Vec<Token<'static>>>,
 
     pub transpile_hash: TranspileHash,
     pub decl_stmt: Arc<DocumentDeclarationStatement>,
