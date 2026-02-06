@@ -7,6 +7,13 @@ use crate::proxy::{PROXY_WORKSPACE, Proxy, ResFut};
 pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut<R::Initialize> {
     const JSCONFIG: &str = "jsconfig.json";
 
+    if !this.state.is_diagnostics_enabled()
+        && let Some(d) = params.capabilities.text_document.as_mut()
+    {
+        d.publish_diagnostics = None;
+        d.diagnostic = None;
+    }
+
     // FIXME: if node_modules not installed show user error
     // FIXME: if client not has workspace_folders show client Error message for open Project Folder
     // TODO: if workspace_folders.len() > 2 show error for unsupported

@@ -36,7 +36,7 @@ impl LanguageClient for Proxy {
 
         let mut client = self.client();
         let state = self.state.clone();
-        let Some(bundle) = state.get_bundle_by_emit_uri(&params.uri) else {
+        let Some(any_build) = state.get_build_by_emit_uri(&params.uri) else {
             tracing::warn!("{}", Error::unbuild_fallback());
             let _ = client.publish_diagnostics(params);
             return std::ops::ControlFlow::Continue(());
@@ -47,7 +47,7 @@ impl LanguageClient for Proxy {
 
         let source_diagnostics = params.diagnostics.into_par_iter().filter_map(|d| {
             let mut range = d.range;
-            let Ok(source) = forward_build_range(&mut range, &bundle) else {
+            let Ok(source) = forward_build_range(&mut range, &any_build) else {
                 tracing::warn!("{}", Error::forward_failed());
                 return None;
             };
@@ -77,11 +77,11 @@ impl LanguageClient for Proxy {
             let related_information = if let Some(related_information) = d.related_information {
                 let mut source_related_information = Vec::with_capacity(related_information.len());
                 for ri in related_information {
-                    let Some(bundle) = state.get_bundle_by_emit_uri(&ri.location.uri) else {
+                    let Some(any_build) = state.get_build_by_emit_uri(&ri.location.uri) else {
                         continue;
                     };
                     let mut source_ri_range = ri.location.range;
-                    let Ok(source) = forward_build_range(&mut source_ri_range, &bundle) else {
+                    let Ok(source) = forward_build_range(&mut source_ri_range, &any_build) else {
                         continue;
                     };
 

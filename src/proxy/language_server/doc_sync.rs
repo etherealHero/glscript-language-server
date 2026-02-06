@@ -28,7 +28,9 @@ pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) 
         let b = this.state.set_bundle(&doc.uri).unwrap();
         let t = this.state.set_transpile(&doc.uri).unwrap();
 
-        std::fs::write(b.build.uri.to_file_path().unwrap(), "").unwrap();
+        if this.state.is_diagnostics_enabled() {
+            std::fs::write(b.build.uri.to_file_path().unwrap(), "").unwrap();
+        }
 
         let _ = did_open(s, &b.build.uri, &b.build.content, b.version.into());
         let _ = did_open(s, &t.build.uri, &t.build.content, t.version.into());
@@ -88,7 +90,10 @@ pub fn proxy_did_close(this: &mut Proxy, params: lsp::DidCloseTextDocumentParams
     };
 
     let _ = did_close(&mut this.server(), &bundle.uri);
-    let _ = std::fs::remove_file(bundle.uri.to_file_path().unwrap());
+
+    if this.state.is_diagnostics_enabled() {
+        let _ = std::fs::remove_file(bundle.uri.to_file_path().unwrap());
+    }
 
     this.state.remove_bundle(uri);
 

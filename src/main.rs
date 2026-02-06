@@ -34,8 +34,6 @@ async fn main() {
         .spawn()
         .expect("failed to spawn");
 
-    // tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
     let ref_server = Arc::new(OnceLock::new());
     let ref_client = Arc::new(OnceLock::new());
 

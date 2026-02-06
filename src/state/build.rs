@@ -52,9 +52,19 @@ impl State {
         self.uncommitted_transpile_changes.remove(path);
     }
 
-    pub fn get_bundle_by_emit_uri(&self, emit_uri: &Uri) -> Option<Arc<Build>> {
+    pub fn get_build_by_emit_uri(&self, emit_uri: &Uri) -> Option<Arc<Build>> {
         let emit_uri_canonicalized = emit_uri.try_canonicalize();
-        self.doc_to_bundle
+        let bundle = self
+            .doc_to_bundle
+            .iter()
+            .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
+            .map(|e| e.build.clone());
+
+        if bundle.is_some() {
+            return bundle;
+        }
+
+        self.doc_to_transpile
             .iter()
             .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
             .map(|e| e.build.clone())
