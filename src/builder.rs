@@ -308,7 +308,7 @@ impl Emit {
         for t in tokens {
             match t {
                 Token::IncludePath(t) => {
-                    let dep_path = ctx.proxy_state.path_resolver(path, t.path);
+                    let dep_path = ctx.proxy_state.path_resolver(path, t.lit);
                     let dep_uri = ctx.proxy_state.path_to_uri(&dep_path);
                     let doc_uri = if let Ok(uri) = dep_uri {
                         match ctx.proxy_state.get_doc(&uri).is_ok() {
@@ -433,7 +433,7 @@ impl Emit {
                         continue;
                     }
 
-                    let dep_path = ctx.proxy_state.path_resolver(path, t.path);
+                    let dep_path = ctx.proxy_state.path_resolver(path, t.lit);
                     let dep_uri = ctx.proxy_state.path_to_uri(&dep_path);
                     let (left_offset, right_offset, doc_uri) = if let Ok(uri) = dep_uri {
                         if let Ok(d) = ctx.proxy_state.get_doc(&uri) {
@@ -579,12 +579,12 @@ impl Emit {
                 Token::IncludePath(t) => {
                     if !ctx.resolve_deps {
                         st.push('"');
-                        st.push_str(t.path);
+                        st.push_str(t.lit);
                         st.push('"');
                         continue;
                     }
 
-                    let dep_path = ctx.proxy_state.path_resolver(path, t.path);
+                    let dep_path = ctx.proxy_state.path_resolver(path, t.lit);
                     if let Ok(dep_uri) = ctx.proxy_state.path_to_uri(&dep_path) {
                         if let Ok(dep_doc) = ctx.proxy_state.get_doc(&dep_uri) {
                             st.push_str(&dep_doc.link_stmt);
@@ -604,7 +604,7 @@ impl Emit {
                     };
 
                     st.push('\n'); // traling statements after include path on current line
-                    (0..(t.line_col.col + t.path.len() as u32 + 2)).for_each(|_| st.push(' '));
+                    (0..(t.line_col.col + t.lit.len() as u32 + 2)).for_each(|_| st.push(' '));
                 }
                 Token::RegionOpen(t) => {
                     lt_ro_skip = true;

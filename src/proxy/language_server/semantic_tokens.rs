@@ -64,14 +64,14 @@ fn extra_tokens(doc: Document, st: &State) -> Vec<AbsoluteSemanticToken> {
     let Some(id) = token_types
         .iter()
         .enumerate()
-        .find(|(_, t)| **t == lsp::SemanticTokenType::PARAMETER)
+        .find(|(_, t)| **t == lsp::SemanticTokenType::TYPE)
         .map(|e| e.0 as u32)
     else {
         return vec![];
     };
 
     doc.parse
-        .str_lit_injections
+        .str_interpolations
         .iter()
         .map(|t| AbsoluteSemanticToken::new((lsp::Position::new(t.line, t.col), t.col + 2), id, 0))
         .collect()

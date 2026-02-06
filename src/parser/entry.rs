@@ -41,3 +41,29 @@ fn parse_raw_text(entry_rule: Rule, raw_text: &str) -> Pairs<'_> {
         .unwrap()
         .into_inner()
 }
+
+pub fn find_interpolations(text: &str) -> Vec<u32> {
+    let mut result = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    let mut utf16_pos: u32 = 0;
+
+    while let Some((_, ch)) = chars.next() {
+        if ch == '%'
+            && let Some(&(_, next)) = chars.peek()
+        {
+            if next == '%' {
+                chars.next(); // %%
+                utf16_pos += 2; // '%' + '%'
+                continue;
+            }
+
+            if next.is_alphanumeric() || next == '_' {
+                result.push(utf16_pos); // %<ident>
+            }
+        }
+
+        utf16_pos += ch.len_utf16() as u32;
+    }
+
+    result
+}

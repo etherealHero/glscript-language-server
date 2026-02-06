@@ -91,10 +91,10 @@ impl From<DocumentSources<'_>> for TranspileHash {
             let r_token = match t {
                 Token::IncludePath(path_lit) => {
                     let (col, ln) = (path_lit.line_col.col, path_lit.line_col.line);
-                    let end_col = col + path_lit.path.len() as u32 + 2;
+                    let end_col = col + path_lit.lit.len() as u32 + 2;
                     col.hash(hasher);
                     ln.hash(hasher);
-                    path_lit.path.hash(hasher);
+                    path_lit.lit.hash(hasher);
                     lsp::Range::new(lsp::Position::new(ln, col), lsp::Position::new(ln, end_col))
                 }
                 Token::RegionOpen(span) | Token::RegionClose(span) => {

@@ -3,7 +3,7 @@ use derive_more::{Constructor, From};
 #[derive(Debug)]
 pub enum Token<'a> {
     Include(Span),
-    IncludePath(PathLiteral<'a>),
+    IncludePath(StringLiteral<'a>),
     RegionOpen(Span),
     RegionClose(Span),
     LineTerminator(LineCol),
@@ -19,9 +19,11 @@ pub struct RawToken<'a> {
 }
 
 #[derive(Debug, Constructor)]
-pub struct PathLiteral<'a> {
+pub struct StringLiteral<'a> {
+    /// start token (includes brackets)
     pub line_col: LineCol,
-    pub path: &'a str,
+    /// string literal without brackets
+    pub lit: &'a str,
 }
 
 #[derive(Debug, Constructor)]
