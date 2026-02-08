@@ -44,7 +44,7 @@ impl State {
                 true => msg.to_string(),
                 false => format!("{idx}/{size} {msg}"),
             };
-            let _ = client.progress(lsp::ProgressParams {
+            if let Err(e) = client.progress(lsp::ProgressParams {
                 token: self.work_done_progress_token.get().unwrap().clone().clone(),
                 value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::Report(
                     lsp::WorkDoneProgressReport {
@@ -53,19 +53,23 @@ impl State {
                         percentage,
                     },
                 )),
-            });
+            }) {
+                tracing::error!("{e}");
+            };
         }
     }
 
     pub fn destroy_progress(&self, client: &mut ClientSocket) {
         if self.work_done_progress_present.load() {
             self.work_done_progress_present.store(false);
-            let _ = client.progress(lsp::ProgressParams {
+            if let Err(e) = client.progress(lsp::ProgressParams {
                 token: self.work_done_progress_token.get().unwrap().clone(),
                 value: lsp::ProgressParamsValue::WorkDone(lsp::WorkDoneProgress::End(
                     lsp::WorkDoneProgressEnd::default(),
                 )),
-            });
+            }) {
+                tracing::error!("{e}");
+            };
         }
     }
 }

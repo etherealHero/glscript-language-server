@@ -67,8 +67,14 @@ impl Proxy {
         let proxy = Self::new(client, server, std::sync::Arc::new(State::default()));
         let sr = init_language_server_router(proxy.clone());
         let cr = Router::from_language_client(proxy);
-        let server = ServiceBuilder::new().layer(ForwardingLayer).service(sr);
-        let client = ServiceBuilder::new().layer(ForwardingLayer).service(cr);
+        let server = ServiceBuilder::new()
+            .layer(ForwardingLayer)
+            // .layer(async_lsp::tracing::TracingLayer::default())
+            .service(sr);
+        let client = ServiceBuilder::new()
+            .layer(ForwardingLayer)
+            // .layer(async_lsp::tracing::TracingLayer::default())
+            .service(cr);
         (server, client)
     }
 }

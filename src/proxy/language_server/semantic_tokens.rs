@@ -18,7 +18,7 @@ pub fn proxy_semantic_tokens_full(
     this: &mut Proxy,
     mut params: lsp::SemanticTokensParams,
 ) -> ResFut<R::SemanticTokensFullRequest> {
-    let mut s = this.server();
+    let (mut s, c) = (this.server(), this.client());
     let uri = &params.text_document.uri;
     let transpile = try_ensure_transpile!(this, uri, params, semantic_tokens_full);
     let st = this.state.clone();
@@ -46,12 +46,13 @@ pub fn proxy_semantic_tokens_full(
         });
         let source_tokens = source_tokens.collect();
         let source_tokens = enrich_tokens(source_tokens, extra_tokens);
-
-        // tracing::info!("source_tokens: {:#?}", source_tokens);
-        // tracing::info!("token_types: {:#?}", st.get_token_types_capabilities());
-
         let data = encode(source_tokens);
         let semantic_tokens = SemanticTokens { result_id, data };
+
+        if !st.tsserver_initialized() {
+            st.index_project(c).await;
+        }
+
         Ok(Some(SR::Tokens(semantic_tokens)))
     })
 }

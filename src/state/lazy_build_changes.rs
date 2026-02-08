@@ -29,6 +29,29 @@ impl State {
             .or_insert(vec![(doc_changes, transpile_changed)]);
     }
 
+    pub fn commit_changes(&self, source_uri: &Uri, s: &mut ServerSocket) {
+        let Ok(path) = self.uri_to_path(source_uri) else {
+            return;
+        };
+
+        let commit = |s: &mut ServerSocket, storage: &UnforwardedBuildChanges| {
+            let Some(changes) = storage.remove(&path).map(|e| e.1) else {
+                return;
+            };
+
+            for change in changes {
+                let _ = s.did_change(change);
+            }
+        };
+
+        self.forward();
+
+        commit(s, &self.uncommitted_bundle_changes);
+        commit(s, &self.uncommitted_transpile_changes);
+    }
+}
+
+impl State {
     fn forward(&self) {
         use rayon::prelude::*;
 
@@ -127,26 +150,5 @@ impl State {
             .entry(path)
             .and_modify(modify)
             .or_insert(vec![forward_changes]);
-    }
-
-    pub fn commit_changes(&self, source_uri: &Uri, s: &mut ServerSocket) {
-        let Ok(path) = self.uri_to_path(source_uri) else {
-            return;
-        };
-
-        let commit = |s: &mut ServerSocket, storage: &UnforwardedBuildChanges| {
-            let Some(changes) = storage.remove(&path).map(|e| e.1) else {
-                return;
-            };
-
-            for change in changes {
-                let _ = s.did_change(change);
-            }
-        };
-
-        self.forward();
-
-        commit(s, &self.uncommitted_bundle_changes);
-        commit(s, &self.uncommitted_transpile_changes);
     }
 }
