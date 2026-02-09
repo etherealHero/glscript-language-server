@@ -10,7 +10,7 @@ mod tokens;
 #[derive(Constructor, Debug, Default)]
 pub struct Parse<'a> {
     pub compressed_tokens: Vec<Token<'a>>,
-    pub str_interpolations: Vec<LineCol>, // TODO:
+    pub str_interpolations: Vec<LineCol>,
 }
 
 pub fn parse<'a>(raw_text: &'a str) -> Parse<'a> {
