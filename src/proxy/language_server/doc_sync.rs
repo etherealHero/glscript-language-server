@@ -1,7 +1,7 @@
 use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
-use crate::builder::BUILD_FILE_EXT;
+use crate::builder::EMIT_FILE_EXT;
 use crate::proxy::Canonicalize;
 use crate::proxy::language_server::{did_close, did_open};
 use crate::proxy::{JS_LANG_ID, Proxy, ResFut, language_server::NotifyResult};
@@ -10,7 +10,7 @@ use crate::try_ensure_bundle;
 pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) -> NotifyResult {
     let s = &mut this.server();
     let doc = &params.text_document;
-    if doc.language_id == JS_LANG_ID && !doc.uri.as_str().ends_with(BUILD_FILE_EXT) {
+    if doc.language_id == JS_LANG_ID && !doc.uri.as_str().ends_with(EMIT_FILE_EXT) {
         let res = this.state.set_doc(
             &doc.uri,
             &[lsp::TextDocumentContentChangeEvent {
@@ -111,12 +111,11 @@ pub fn proxy_did_change_watched_files(
     this: &mut Proxy,
     mut params: lsp::DidChangeWatchedFilesParams,
 ) -> NotifyResult {
-    let mut forward_changes = vec![];
+    let mut forward_changes = Vec::with_capacity(params.changes.len());
     for channge in params.changes {
-        let is_build_file = !channge.uri.as_str().ends_with(BUILD_FILE_EXT);
-        let is_build_dep = this.state.get_bundle(&channge.uri).is_some(); // TODO: ???
+        let is_emit_file = !channge.uri.as_str().ends_with(EMIT_FILE_EXT);
 
-        if is_build_file || is_build_dep {
+        if is_emit_file {
             continue;
         }
 

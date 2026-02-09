@@ -39,7 +39,6 @@ pub fn proxy_hover_with_decl_info(
             hover.range = None
         }
 
-        // TODO: skip awaiting decl on empty hover. ^^^ Check hover.is_none()
         let decl: ResReqProxy<R::GotoDefinition> = timeout(Duration::from_millis(200), decl_req)
             .await
             .unwrap_or(Ok(None));

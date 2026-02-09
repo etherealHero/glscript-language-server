@@ -1,7 +1,7 @@
 use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, ResponseError, lsp_types as lsp};
 
-use crate::builder::BUILD_FILE_EXT;
+use crate::builder::EMIT_FILE_EXT;
 use crate::proxy::language_server::{DefRes, Error, forward_build_range};
 use crate::proxy::{Canonicalize, DECL_FILE_EXT, Proxy, ResFut};
 use crate::state::State;
@@ -72,7 +72,7 @@ fn forward(
         }
 
         // TODO: emit build file with global doc constant to debug anywhere ?
-        if link.target_uri.as_str().ends_with(BUILD_FILE_EXT) {
+        if link.target_uri.as_str().ends_with(EMIT_FILE_EXT) {
             continue;
         }
 

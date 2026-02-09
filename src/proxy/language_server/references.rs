@@ -129,7 +129,7 @@ async fn traverse(
             let doc_path = doc_path.strip_prefix(root).unwrap_or(&doc_path);
             let err = format!("Sync doc ({}) failed. Request aborted", doc_path.display());
             tracing::error!(err);
-            return Err(Error::request_failed(err)); // FIXME:
+            return Err(Error::request_failed(err));
         }
     };
 
@@ -144,7 +144,7 @@ async fn traverse(
 
     if let Ok(Some(locations)) = fetch_response {
         for l in locations.into_iter() {
-            workspace_locations.insert(l); // TODO: undistinct links ?
+            workspace_locations.insert(l);
         }
     }
 
@@ -198,7 +198,7 @@ fn get_unopened_documents(
             uri
         })
         .collect();
-    tracing::info!("repository indexed"); // TODO: check if too long
+    tracing::info!("repository indexed");
 
     let all_bundles_contains_source = state.get_bundles_contains_source(&def_source); // TODO: if global context ?
 
@@ -243,8 +243,6 @@ async fn get_definition_location(
     }
 }
 
-// TODO: rewrite with config
-#[inline]
 async fn fetch_with_build_params(
     s: &mut async_lsp::ServerSocket,
     state: &Arc<State>,

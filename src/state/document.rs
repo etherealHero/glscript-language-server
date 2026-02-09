@@ -14,7 +14,6 @@ use crate::types::{DocumentIdentifier, Source, SourceHash};
 
 /// State of client buffers
 impl State {
-    // FIXME: some script duplicated. Validate uri_to_path fn
     pub fn set_doc(
         &self,
         source_uri: &Uri,

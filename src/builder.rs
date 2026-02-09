@@ -15,7 +15,7 @@ mod forwarding;
 mod options_builder;
 mod source_map_builder;
 
-pub const BUILD_FILE_EXT: &str = ".emitted";
+pub const EMIT_FILE_EXT: &str = ".emitted";
 
 #[derive(Debug, Constructor)]
 pub struct Build {

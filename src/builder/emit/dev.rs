@@ -5,7 +5,7 @@ pub fn emit_on_disk(
     source_map: &sourcemap::SourceMap,
     content: &String,
 ) -> Result<(), anyhow::Error> {
-    use crate::{builder::BUILD_FILE_EXT, proxy::PROXY_WORKSPACE};
+    use crate::{builder::EMIT_FILE_EXT, proxy::PROXY_WORKSPACE};
     use base64::prelude::{BASE64_STANDARD, Engine as _};
 
     let mut sm_json = Vec::new();
@@ -16,8 +16,8 @@ pub fn emit_on_disk(
         &content, sm_base64
     );
     let debug_source = match opt.resolve_deps {
-        true => doc.source.to_string() + BUILD_FILE_EXT,
-        false => doc.source.to_string() + ".transpiled" + BUILD_FILE_EXT,
+        true => doc.source.to_string() + EMIT_FILE_EXT,
+        false => doc.source.to_string() + ".transpiled" + EMIT_FILE_EXT,
     };
     let proxy_ws = opt.st.get_project().join(PROXY_WORKSPACE);
     let debug_filepath = proxy_ws.join("./debug").join(debug_source);
