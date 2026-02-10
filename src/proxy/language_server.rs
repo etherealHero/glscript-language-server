@@ -152,12 +152,17 @@ impl LanguageServer for Proxy {
         unreachable!()
     }
 
+    /// Used in
+    /// - [`hover::proxy_hover_with_decl_info`]
+    /// - [`references::proxy_workspace_references`]
     #[tracing::instrument(skip_all, name = "proxy_definition")]
     fn definition(&mut self, params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
         let req = definition::proxy_definition(self, params);
         Box::pin(async move { req.await })
     }
 
+    /// Used in
+    /// - [`common_features::proxy_rename`]
     #[tracing::instrument(skip_all)]
     fn references(&mut self, params: lsp::ReferenceParams) -> ResFut<R::References> {
         self.state.cancel_received.store(false);
