@@ -8,7 +8,7 @@ use ropey::Rope;
 
 use crate::parser::{Parse, parse};
 use crate::proxy::{Canonicalize, PROXY_WORKSPACE};
-use crate::state::State;
+use crate::state::{BuildStorage, State};
 use crate::types::{Document, DocumentDeclarationStatement, DocumentLinkStatement};
 use crate::types::{DocumentIdentifier, Source, SourceHash};
 
@@ -116,10 +116,15 @@ impl State {
 
     pub fn get_doc_by_emit_uri(&self, emit_uri: &Uri) -> Option<Document> {
         let emit_uri_canonicalized = emit_uri.try_canonicalize();
-        self.doc_to_bundle
-            .iter()
-            .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
-            .map(|e| self.get_doc(&self.path_to_uri(e.key()).unwrap()).unwrap())
+        let get_doc = |s: &BuildStorage| {
+            s.iter()
+                .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
+                .map(|e| self.get_doc(&self.path_to_uri(e.key()).unwrap()).unwrap())
+        };
+        match get_doc(&self.doc_to_bundle) {
+            Some(doc) => doc.into(),
+            None => get_doc(&self.doc_to_transpile),
+        }
     }
 
     pub fn get_current_doc(&self) -> Option<Uri> {

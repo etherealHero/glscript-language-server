@@ -5,10 +5,8 @@ use async_lsp::lsp_types::Url as Uri;
 
 use crate::builder::{Build, BuildOptionsBuilder};
 use crate::proxy::Canonicalize;
-use crate::state::State;
+use crate::state::{BuildStorage, State};
 use crate::types::{BuildWithVersion, Source, SourcePattern};
-
-type TStorage = dashmap::DashMap<PathBuf, BuildWithVersion>;
 
 /// State of builds
 impl State {
@@ -54,20 +52,15 @@ impl State {
 
     pub fn get_build_by_emit_uri(&self, emit_uri: &Uri) -> Option<Arc<Build>> {
         let emit_uri_canonicalized = emit_uri.try_canonicalize();
-        let bundle = self
-            .doc_to_bundle
-            .iter()
-            .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
-            .map(|e| e.build.clone());
-
-        if bundle.is_some() {
-            return bundle;
+        let get_build = |s: &BuildStorage| {
+            s.iter()
+                .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
+                .map(|e| e.build.clone())
+        };
+        match get_build(&self.doc_to_bundle) {
+            Some(build) => build.into(),
+            None => get_build(&self.doc_to_transpile),
         }
-
-        self.doc_to_transpile
-            .iter()
-            .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
-            .map(|e| e.build.clone())
     }
 
     /// returns SourcePath for canonicalize interface
@@ -99,13 +92,13 @@ impl State {
     fn build(
         &self,
         opt: BuildOptionsBuilder,
-        storage: &TStorage,
+        s: &BuildStorage,
     ) -> anyhow::Result<BuildWithVersion> {
         let path = &self.uri_to_path(opt.target())?;
-        let Some(mut cur_build) = storage.get_mut(path) else {
+        let Some(mut cur_build) = s.get_mut(path) else {
             let new_build = Build::create(opt)?;
             let build_with_version = BuildWithVersion::new(new_build.into(), 1);
-            storage.insert(path.into(), build_with_version.clone());
+            s.insert(path.into(), build_with_version.clone());
             return Ok(build_with_version);
         };
 
@@ -117,8 +110,8 @@ impl State {
         Ok(cur_build.clone())
     }
 
-    fn get_build_from_storage(&self, source_uri: &Uri, storage: &TStorage) -> Option<Arc<Build>> {
+    fn get_build_from_storage(&self, source_uri: &Uri, s: &BuildStorage) -> Option<Arc<Build>> {
         let path = self.uri_to_path(source_uri).ok()?;
-        storage.get(&path).map(|guard| guard.build.clone())
+        s.get(&path).map(|guard| guard.build.clone())
     }
 }

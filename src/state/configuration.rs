@@ -49,14 +49,15 @@ impl State {
         *(self.diagnostics_compatibility.get().unwrap_or(&false))
     }
 
-    pub fn tsserver_initialized(&self) -> bool {
-        *self.tsserver_initialized.get().unwrap_or(&false)
-    }
-
-    /// must called once after initialization of proxy and tsserver
+    /// called once after initialization of proxy and tsserver
     #[tracing::instrument(skip_all)]
-    pub async fn index_project(&self, mut client: ClientSocket) {
+    pub async fn index_project_if_needed(&self, mut client: ClientSocket) {
         use ignore::Walk;
+
+        match *self.tsserver_initialized.get().unwrap_or(&false) {
+            false => self.tsserver_initialized.set(true).unwrap(),
+            true => return,
+        }
 
         self.create_progress(&mut client).await;
         tokio::time::sleep(tokio::time::Duration::from_nanos(1)).await;
@@ -100,6 +101,5 @@ impl State {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
         self.destroy_progress(&mut client);
-        self.tsserver_initialized.set(true).unwrap();
     }
 }

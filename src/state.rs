@@ -17,6 +17,7 @@ mod progress;
 
 type UnforwardedDocChanges = DashMap<PathBuf, Vec<(lsp::DidChangeTextDocumentParams, bool)>>; // Vec<(_, dependency_changed)>
 pub type UnforwardedBuildChanges = DashMap<PathBuf, Vec<lsp::DidChangeTextDocumentParams>>;
+pub type BuildStorage = dashmap::DashMap<PathBuf, BuildWithVersion>;
 
 #[derive(Default)]
 pub struct State {
@@ -32,8 +33,8 @@ pub struct State {
 
     documents: DashMap<PathBuf, Document>,
     current_doc: Arc<Mutex<Option<Uri>>>,
-    doc_to_bundle: DashMap<PathBuf, BuildWithVersion>,
-    doc_to_transpile: DashMap<PathBuf, BuildWithVersion>,
+    doc_to_bundle: BuildStorage,
+    doc_to_transpile: BuildStorage,
 
     unforwarded_doc_changes: UnforwardedDocChanges,
     uncommitted_bundle_changes: UnforwardedBuildChanges,

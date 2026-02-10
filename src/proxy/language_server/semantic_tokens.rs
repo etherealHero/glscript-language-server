@@ -3,11 +3,11 @@ use async_lsp::{LanguageServer, lsp_types as lsp};
 use derive_more::Constructor;
 use rayon::prelude::*;
 
+use crate::builder::Build;
 use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
 use crate::state::State;
 use crate::try_ensure_transpile;
-use crate::types::Document;
 
 // TODO: add %param str injection, mono-highlight regions (with provided option)
 /// wiki:
@@ -22,42 +22,75 @@ pub fn proxy_semantic_tokens_full(
     let uri = &params.text_document.uri;
     let transpile = try_ensure_transpile!(this, uri, params, semantic_tokens_full);
     let st = this.state.clone();
-    let extra_tokens = extra_tokens(st.get_doc(uri).unwrap(), &st);
 
     params.text_document.uri = transpile.uri.clone();
 
     Box::pin(async move {
-        let res = s.semantic_tokens_full(params).await;
-        let res = res.map_err(Error::internal);
-
         type SR = lsp::SemanticTokensResult;
-        let Ok(Some(SR::Tokens(SemanticTokens { result_id, data }))) = res else {
-            return Err(Error::forward_failed());
-        };
-
-        let tokens = decode(data);
-        let source_tokens = tokens.into_par_iter().filter_map(|t| {
-            let end = lsp::Position::new(t.range.0.line, t.range.1);
-            let mut range = lsp::Range::new(t.range.0, end);
-            forward_build_range(&mut range, &transpile).ok()?;
-            let range = (range.start, range.end.character);
-            let token = AbsoluteSemanticToken::new(range, t.token_type, t.token_modifiers_bitset);
-            Some(token)
-        });
-        let source_tokens = source_tokens.collect();
-        let source_tokens = enrich_tokens(source_tokens, extra_tokens);
-        let data = encode(source_tokens);
-        let semantic_tokens = SemanticTokens { result_id, data };
-
-        if !st.tsserver_initialized() {
-            st.index_project(c).await;
+        let fwd = async |t| Ok(Some(SR::Tokens(forward(t, &transpile, &st, c).await)));
+        match s.semantic_tokens_full(params).await {
+            Ok(Some(SR::Tokens(transpile_tokens))) => fwd(transpile_tokens).await,
+            Err(err) => Err(Error::internal(err)),
+            _ => Err(Error::forward_failed()),
         }
-
-        Ok(Some(SR::Tokens(semantic_tokens)))
     })
 }
 
-fn extra_tokens(doc: Document, st: &State) -> Vec<AbsoluteSemanticToken> {
+#[tracing::instrument(skip_all)]
+pub fn proxy_semantic_tokens_range(
+    this: &mut Proxy,
+    mut params: lsp::SemanticTokensRangeParams,
+) -> ResFut<R::SemanticTokensRangeRequest> {
+    let (mut s, c) = (this.server(), this.client());
+    let uri = &params.text_document.uri;
+    let transpile = try_ensure_transpile!(this, uri, params, semantic_tokens_range);
+    let st = this.state.clone();
+    let doc = this.state.get_doc(uri).unwrap();
+    let Some(transpile_range) = transpile.forward_src_range(&params.range, &doc.source) else {
+        return Box::pin(async move { Err(Error::forward_failed()) });
+    };
+
+    params.text_document.uri = transpile.uri.clone();
+    params.range = transpile_range;
+
+    Box::pin(async move {
+        type SR = lsp::SemanticTokensRangeResult;
+        let fwd = async |t| Ok(Some(SR::Tokens(forward(t, &transpile, &st, c).await)));
+        match s.semantic_tokens_range(params).await {
+            Ok(Some(SR::Tokens(transpile_tokens))) => fwd(transpile_tokens).await,
+            Err(err) => Err(Error::internal(err)),
+            _ => Err(Error::forward_failed()),
+        }
+    })
+}
+
+async fn forward(
+    transpile_tokens: lsp::SemanticTokens,
+    transpile: &Build,
+    st: &State,
+    c: async_lsp::ClientSocket,
+) -> lsp::SemanticTokens {
+    let tokens = decode(transpile_tokens.data);
+    let extra_tokens = extra_tokens(transpile, st);
+    let source_tokens = tokens.into_par_iter().filter_map(|t| {
+        let end = lsp::Position::new(t.range.0.line, t.range.1);
+        let mut range = lsp::Range::new(t.range.0, end);
+        forward_build_range(&mut range, transpile).ok()?;
+        let range = (range.start, range.end.character);
+        let token = AbsoluteSemanticToken::new(range, t.token_type, t.token_modifiers_bitset);
+        Some(token)
+    });
+    let source_tokens = source_tokens.collect();
+    let source_tokens = enrich_tokens(source_tokens, extra_tokens);
+    let data = encode(source_tokens);
+    let result_id = transpile_tokens.result_id;
+
+    st.index_project_if_needed(c).await;
+
+    SemanticTokens { result_id, data }
+}
+
+fn extra_tokens(transpile: &Build, st: &State) -> Vec<AbsoluteSemanticToken> {
     let Some(token_types) = st.get_token_types_capabilities() else {
         return vec![];
     };
@@ -71,7 +104,9 @@ fn extra_tokens(doc: Document, st: &State) -> Vec<AbsoluteSemanticToken> {
         return vec![];
     };
 
-    doc.parse
+    st.get_doc_by_emit_uri(&transpile.uri)
+        .unwrap()
+        .parse
         .str_interpolations
         .iter()
         .map(|t| AbsoluteSemanticToken::new((lsp::Position::new(t.line, t.col), t.col + 2), id, 0))

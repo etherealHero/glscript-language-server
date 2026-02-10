@@ -133,6 +133,7 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::WorkspaceSymbolResolve, _>(ws_symbol::proxy_workspace_symbol_resolve)
         .request::<R::FoldingRangeRequest, _>(common_features::proxy_folding_range)
         .request::<R::SemanticTokensFullRequest, _>(semantic_tokens::proxy_semantic_tokens_full)
+        .request::<R::SemanticTokensRangeRequest, _>(semantic_tokens::proxy_semantic_tokens_range)
         .request::<R::Formatting, _>(formatting::proxy_formatting)
         .request::<R::RangeFormatting, _>(formatting::proxy_range_formatting)
         .request::<R::InlayHintRequest, _>(inlay_hint::proxy_inlay_hint);
