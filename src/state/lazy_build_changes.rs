@@ -61,20 +61,19 @@ impl State {
             for (doc_changes, transpile_changed) in changes {
                 let transpile_changed = *transpile_changed;
 
-                let t = self.get_transpile(doc_uri).unwrap();
-                let b = self.get_bundle(doc_uri).unwrap();
+                if let Some(t) = self.get_transpile(doc_uri) {
+                    let changes = self.forward_changes(&t, doc_changes, transpile_changed);
+                    let t_new = self.set_transpile(doc_uri).unwrap();
+                    let p = self.forward_params(changes, &t_new, transpile_changed);
+                    self.add_forwarded_changes(doc_uri, p, &self.uncommitted_transpile_changes);
+                }
 
-                let changes_t = self.forward_changes(&t, doc_changes, transpile_changed);
-                let changes_b = self.forward_changes(&b, doc_changes, transpile_changed);
-
-                let new_t = self.set_transpile(doc_uri).unwrap();
-                let new_b = self.set_bundle(doc_uri).unwrap();
-
-                let params_b = self.forward_params(changes_b, &new_b, transpile_changed);
-                let params_t = self.forward_params(changes_t, &new_t, transpile_changed);
-
-                self.add_forwarded_changes(doc_uri, params_b, &self.uncommitted_bundle_changes);
-                self.add_forwarded_changes(doc_uri, params_t, &self.uncommitted_transpile_changes);
+                if let Some(b) = self.get_bundle(doc_uri) {
+                    let changes = self.forward_changes(&b, doc_changes, transpile_changed);
+                    let b_new = self.set_bundle(doc_uri).unwrap();
+                    let p = self.forward_params(changes, &b_new, transpile_changed);
+                    self.add_forwarded_changes(doc_uri, p, &self.uncommitted_bundle_changes);
+                }
             }
         });
 
