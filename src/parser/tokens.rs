@@ -32,7 +32,7 @@ pub struct Span {
     pub len: u32,
 }
 
-#[derive(Debug, From)]
+#[derive(Debug, From, Clone)]
 pub struct LineCol {
     pub line: u32,
     pub col: u32,

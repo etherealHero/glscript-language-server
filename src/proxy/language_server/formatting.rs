@@ -10,7 +10,7 @@ use crate::proxy::{Proxy, ResFut};
 use crate::try_ensure_transpile;
 use crate::types::Document;
 
-pub fn formatting(
+pub fn proxy_formatting(
     this: &mut Proxy,
     mut params: lsp::DocumentFormattingParams,
 ) -> ResFut<R::Formatting> {
@@ -32,7 +32,7 @@ pub fn formatting(
     })
 }
 
-pub fn range_formatting(
+pub fn proxy_range_formatting(
     this: &mut Proxy,
     mut params: lsp::DocumentRangeFormattingParams,
 ) -> ResFut<R::RangeFormatting> {

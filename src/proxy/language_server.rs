@@ -3,7 +3,7 @@ use async_lsp::router::Router;
 use async_lsp::{ErrorCode, LanguageServer, ResponseError, ServerSocket, lsp_types as lsp};
 
 use crate::builder::Build;
-use crate::proxy::{DECL_FILE_EXT, JS_FILE_EXT, JS_LANG_ID, Proxy, ResFut};
+use crate::proxy::{JS_LANG_ID, Proxy, ResFut};
 use crate::types::Source;
 
 mod common_features;
@@ -13,6 +13,7 @@ mod doc_symbol;
 mod doc_sync;
 mod formatting;
 mod hover;
+mod inlay_hint;
 mod lifecycle;
 mod references;
 mod selection_range;
@@ -34,6 +35,8 @@ impl Error {
     }
 
     pub fn unexpected_source() -> ResponseError {
+        use crate::proxy::{DECL_FILE_EXT, JS_FILE_EXT};
+
         let reason = "Missmatched source extension";
         let err = format!("{reason}, expect '{JS_FILE_EXT}' or '{DECL_FILE_EXT}'. Request aborted");
         ResponseError::new(ErrorCode::REQUEST_FAILED, err)
@@ -130,10 +133,14 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::WorkspaceSymbolResolve, _>(ws_symbol::proxy_workspace_symbol_resolve)
         .request::<R::FoldingRangeRequest, _>(common_features::proxy_folding_range)
         .request::<R::SemanticTokensFullRequest, _>(semantic_tokens::proxy_semantic_tokens_full)
-        .request::<R::Formatting, _>(formatting::formatting)
-        .request::<R::RangeFormatting, _>(formatting::range_formatting);
+        .request::<R::Formatting, _>(formatting::proxy_formatting)
+        .request::<R::RangeFormatting, _>(formatting::proxy_range_formatting)
+        .request::<R::InlayHintRequest, _>(inlay_hint::proxy_inlay_hint);
     router
 }
+
+// TODO: https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/formatting.ts
+type _OnTypeFormatting = ResFut<R::OnTypeFormatting>;
 
 #[allow(clippy::redundant_async_block)]
 impl LanguageServer for Proxy {
@@ -148,22 +155,6 @@ impl LanguageServer for Proxy {
     fn definition(&mut self, params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
         let req = definition::proxy_definition(self, params);
         Box::pin(async move { req.await })
-    }
-
-    // TODO: https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/formatting.ts
-    fn on_type_formatting(
-        &mut self,
-        _: lsp::DocumentOnTypeFormattingParams,
-    ) -> ResFut<R::OnTypeFormatting> {
-        todo!()
-    }
-
-    fn inlay_hint(&mut self, _: lsp::InlayHintParams) -> ResFut<R::InlayHintRequest> {
-        todo!()
-    }
-
-    fn inlay_hint_resolve(&mut self, _: lsp::InlayHint) -> ResFut<R::InlayHintResolveRequest> {
-        todo!()
     }
 
     #[tracing::instrument(skip_all)]
