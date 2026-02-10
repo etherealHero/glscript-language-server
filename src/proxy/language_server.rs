@@ -4,7 +4,6 @@ use async_lsp::{ErrorCode, LanguageServer, ResponseError, ServerSocket, lsp_type
 
 use crate::builder::Build;
 use crate::proxy::{DECL_FILE_EXT, JS_FILE_EXT, JS_LANG_ID, Proxy, ResFut};
-use crate::try_ensure_transpile;
 use crate::types::Source;
 
 mod common_features;
@@ -12,6 +11,7 @@ mod completion;
 mod definition;
 mod doc_symbol;
 mod doc_sync;
+mod formatting;
 mod hover;
 mod lifecycle;
 mod references;
@@ -130,7 +130,8 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::WorkspaceSymbolResolve, _>(ws_symbol::proxy_workspace_symbol_resolve)
         .request::<R::FoldingRangeRequest, _>(common_features::proxy_folding_range)
         .request::<R::SemanticTokensFullRequest, _>(semantic_tokens::proxy_semantic_tokens_full)
-        .request::<R::Formatting, _>(Proxy::formatting);
+        .request::<R::Formatting, _>(formatting::formatting)
+        .request::<R::RangeFormatting, _>(formatting::range_formatting);
     router
 }
 
@@ -147,21 +148,6 @@ impl LanguageServer for Proxy {
     fn definition(&mut self, params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
         let req = definition::proxy_definition(self, params);
         Box::pin(async move { req.await })
-    }
-
-    // FIXME: forward text edit on transpiled stmt
-    fn formatting(&mut self, mut params: lsp::DocumentFormattingParams) -> ResFut<R::Formatting> {
-        let mut s = self.server();
-        let transpile = try_ensure_transpile!(self, &params.text_document.uri, params, formatting);
-        params.text_document.uri = transpile.uri.clone();
-        Box::pin(async move { s.formatting(params).await.map_err(Error::internal) })
-    }
-
-    fn range_formatting(
-        &mut self,
-        _: lsp::DocumentRangeFormattingParams,
-    ) -> ResFut<R::RangeFormatting> {
-        todo!()
     }
 
     // TODO: https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/formatting.ts
