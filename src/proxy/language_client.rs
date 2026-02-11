@@ -30,7 +30,6 @@ impl LanguageClient for Proxy {
         std::ops::ControlFlow::Continue(())
     }
 
-    #[tracing::instrument(skip_all, name = "proxy_publish_diagnostics")]
     fn publish_diagnostics(&mut self, params: lsp::PublishDiagnosticsParams) -> Self::NotifyResult {
         use rayon::prelude::*;
 

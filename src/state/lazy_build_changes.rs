@@ -104,11 +104,7 @@ impl State {
                     range_length: change.range_length,
                     text: change.text.clone(),
                 }),
-                None => {
-                    let err = format!("Sync doc ({}) failed on forward client changes", doc.source);
-                    tracing::error!(err); // FIXME: sync docs failed
-                    continue;
-                }
+                None => break,
             };
         }
 

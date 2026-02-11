@@ -50,7 +50,6 @@ impl State {
     }
 
     /// called once after initialization of proxy and tsserver
-    #[tracing::instrument(skip_all)]
     pub async fn index_project_if_needed(&self, mut client: ClientSocket) {
         use ignore::Walk;
 

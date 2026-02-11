@@ -75,7 +75,6 @@ pub fn proxy_prepare_rename(
     })
 }
 
-#[tracing::instrument(skip_all)]
 pub fn proxy_folding_range(
     this: &mut Proxy,
     mut params: lsp::FoldingRangeParams,

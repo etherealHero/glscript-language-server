@@ -9,11 +9,13 @@ use async_lsp::{ClientSocket, ResponseError, ServerSocket};
 use crate::proxy::language_server::init_language_server_router;
 use crate::state::State;
 use forward_layer::{ForwardingLayer, TService};
+pub use tracing_formatter::Formatter;
 
 mod forward_layer;
 mod language_client;
 mod language_server;
 mod macros;
+mod tracing_formatter;
 
 pub const JS_LANG_ID: &str = "javascript";
 pub const JS_FILE_EXT: &str = ".js";
@@ -66,11 +68,13 @@ impl Proxy {
         client: std::sync::Arc<std::sync::OnceLock<ClientSocket>>,
     ) -> (impl TService<Future: Send>, impl TService<Future: Send>) {
         let proxy = Self::new(client, server, std::sync::Arc::new(State::default()));
-        let sr = init_language_server_router(proxy.clone());
-        let cr = Router::from_language_client(proxy);
-        let server = ServiceBuilder::new().layer(ForwardingLayer).service(sr);
-        let client = ServiceBuilder::new().layer(ForwardingLayer).service(cr);
-        // .layer(async_lsp::tracing::TracingLayer::default())
-        (server, client)
+        let server = init_language_server_router(proxy.clone());
+        let client = Router::from_language_client(proxy);
+        let init = || {
+            ServiceBuilder::new()
+                .layer(async_lsp::tracing::TracingLayer::default())
+                .layer(ForwardingLayer)
+        };
+        (init().service(server), init().service(client))
     }
 }

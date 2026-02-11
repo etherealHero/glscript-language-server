@@ -5,7 +5,6 @@ use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
 use crate::try_ensure_bundle;
 
-#[tracing::instrument(skip_all)]
 pub fn proxy_symbol(
     this: &mut Proxy,
     params: lsp::WorkspaceSymbolParams,
@@ -44,7 +43,6 @@ pub fn proxy_symbol(
     })
 }
 
-#[tracing::instrument(skip_all)]
 pub fn proxy_workspace_symbol_resolve(
     _this: &mut Proxy,
     params: lsp::WorkspaceSymbol,

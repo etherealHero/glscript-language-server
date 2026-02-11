@@ -13,7 +13,6 @@ use crate::try_ensure_transpile;
 /// wiki:
 /// - <https://pygls.readthedocs.io/en/latest/protocol/howto/interpret-semantic-tokens.html>
 /// - [`lsp::SemanticTokens`] on prop `data`
-#[tracing::instrument(skip_all)]
 pub fn proxy_semantic_tokens_full(
     this: &mut Proxy,
     mut params: lsp::SemanticTokensParams,
@@ -36,7 +35,6 @@ pub fn proxy_semantic_tokens_full(
     })
 }
 
-#[tracing::instrument(skip_all)]
 pub fn proxy_semantic_tokens_range(
     this: &mut Proxy,
     mut params: lsp::SemanticTokensRangeParams,
@@ -71,7 +69,7 @@ async fn forward(
     c: async_lsp::ClientSocket,
 ) -> lsp::SemanticTokens {
     let tokens = decode(transpile_tokens.data);
-    let extra_tokens = extra_tokens(transpile, st);
+    let extra_tokens = extra_tokens(transpile, st).unwrap_or_default();
     let source_tokens = tokens.into_par_iter().filter_map(|t| {
         let end = lsp::Position::new(t.range.0.line, t.range.1);
         let mut range = lsp::Range::new(t.range.0, end);
@@ -90,27 +88,20 @@ async fn forward(
     SemanticTokens { result_id, data }
 }
 
-fn extra_tokens(transpile: &Build, st: &State) -> Vec<AbsoluteSemanticToken> {
-    let Some(token_types) = st.get_token_types_capabilities() else {
-        return vec![];
-    };
-
-    let Some(id) = token_types
+fn extra_tokens(transpile: &Build, st: &State) -> Option<Vec<AbsoluteSemanticToken>> {
+    let token_types = st.get_token_types_capabilities()?;
+    let id = token_types
         .iter()
         .enumerate()
         .find(|(_, t)| **t == lsp::SemanticTokenType::TYPE)
-        .map(|e| e.0 as u32)
-    else {
-        return vec![];
-    };
-
-    st.get_doc_by_emit_uri(&transpile.uri)
-        .unwrap()
+        .map(|e| e.0 as u32)?;
+    st.get_doc_by_emit_uri(&transpile.uri)?
         .parse
         .str_interpolations
         .iter()
         .map(|t| AbsoluteSemanticToken::new((lsp::Position::new(t.line, t.col), t.col + 2), id, 0))
-        .collect()
+        .collect::<Vec<AbsoluteSemanticToken>>()
+        .into()
 }
 
 fn enrich_tokens(

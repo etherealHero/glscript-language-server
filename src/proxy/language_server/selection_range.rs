@@ -6,7 +6,6 @@ use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
 use crate::try_ensure_transpile;
 
-#[tracing::instrument(skip_all)]
 pub fn proxy_selection_range(
     this: &mut Proxy,
     mut params: lsp::SelectionRangeParams,

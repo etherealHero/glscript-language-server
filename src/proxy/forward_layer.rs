@@ -77,7 +77,7 @@ where
                 Poll::Ready(Ok(result_req))
             }
             Poll::Ready(Err(unimpl_req)) if unimpl_req.code == ErrorCode::METHOD_NOT_FOUND => {
-                tracing::warn!("unimplemented request {}", this.method);
+                tracing::warn!("unimplemented");
                 Poll::Ready(Ok(serde_json::Value::Null))
             }
             Poll::Ready(Err(fail_req)) => {
@@ -91,11 +91,10 @@ where
 
 impl<S: TService<Future: Send> + 'static> LspService for ForwardingMiddleware<S> {
     fn notify(&mut self, notif: AnyNotification) -> ControlFlow<async_lsp::Result<()>> {
-        let unimpl_notify = notif.method.clone();
         let result = self.inner.notify(notif);
         match &result {
             ControlFlow::Break(Err(async_lsp::Error::Routing(_))) => {
-                tracing::warn!("unimplemented notify {}", unimpl_notify);
+                tracing::warn!("unimplemented");
                 ControlFlow::Continue(())
             }
             ControlFlow::Break(_) | ControlFlow::Continue(_) => result,

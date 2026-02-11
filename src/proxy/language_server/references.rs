@@ -78,9 +78,9 @@ pub fn proxy_workspace_references(
             };
             let _ = did_close(&mut s, &temp_uri);
 
-            st.send_progress(&mut client, (i, unopened_docs.len()), &msg);
+            st.send_progress(&mut client, (i + 1, unopened_docs.len()), &msg);
             st.remove_bundle(doc_uri);
-            tracing::info!("{msg}");
+            tracing::info!("tsserver request {}/{}", i + 1, unopened_docs.len());
         }
 
         for doc_path in opened_bundles_contains_source {
@@ -162,16 +162,16 @@ fn get_unopened_documents(
     let def_source = state.get_doc(&def_loc.target_uri).unwrap().source;
     let opened_bundles_contains_source = state.get_bundles_contains_source(&def_source); // TODO: if global context ?
     let default_sources: Vec<_> = state.get_default_sources();
-    tracing::info!("raw_entries scan...");
+    let (js, decl) = (&JS_FILE_EXT[1..], &DECL_FILE_EXT[1..]);
+    let (def_lit, source_hash) = get_definition_pattern(def_loc, state);
     let mut raw_entries = Vec::with_capacity(default_sources.len());
+
     for entry in Walk::new(project).flatten() {
         if entry.file_type().is_some_and(|ft| ft.is_file()) {
             raw_entries.push(entry.path().to_owned());
         }
     }
-    tracing::info!("raw_entries scanned; repository indexing...");
-    let (js, decl) = (&JS_FILE_EXT[1..], &DECL_FILE_EXT[1..]);
-    let (def_lit, source_hash) = get_definition_pattern(def_loc, state);
+
     let matched_docs: Vec<Uri> = raw_entries
         .par_iter()
         .filter_map(|p| {
@@ -198,7 +198,6 @@ fn get_unopened_documents(
             uri
         })
         .collect();
-    tracing::info!("repository indexed");
 
     let all_bundles_contains_source = state.get_bundles_contains_source(&def_source); // TODO: if global context ?
 

@@ -7,7 +7,6 @@ use crate::proxy::{Proxy, ResFut};
 use crate::try_ensure_transpile;
 use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 
-#[tracing::instrument(skip_all)]
 pub fn proxy_document_symbol(
     this: &mut Proxy,
     mut params: lsp::DocumentSymbolParams,
