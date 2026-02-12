@@ -33,6 +33,26 @@ pub struct Document {
     pub link_stmt: Arc<DocumentLinkStatement>,
 }
 
+impl Document {
+    pub fn first_non_include_build_pos(&self, build: &Build) -> Option<lsp::Position> {
+        self.parse
+            .compressed_tokens
+            .iter()
+            .rposition(|token| matches!(token, Token::IncludePath(_)))
+            .map(|include_idx| self.parse.compressed_tokens.get(include_idx + 1))
+            .unwrap_or(self.parse.compressed_tokens.first())
+            .map(|token| match token {
+                Token::Include(_) | Token::IncludePath(_) => unreachable!(),
+                Token::RegionOpen(s) | Token::RegionClose(s) => s.line_col.clone(),
+                Token::LineTerminator(lc) | Token::Eoi(lc) => lc.clone(),
+                Token::Common(rt) | Token::CommonWithLineEnding(rt) => rt.line_col.clone(),
+            })
+            .map(|line_col| lsp::Position::new(line_col.line, line_col.col))
+            .map(|source_pos| build.forward_src_position(&source_pos, &self.source))
+            .map(Option::unwrap)
+    }
+}
+
 // TODO: refactor with from SourceMap::Token, LSP Uri (< SourceUri)
 /// must contains lowercase canonicalized strip prefixed path
 /// - is used as source in [`sourcemap`]

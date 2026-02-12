@@ -4,7 +4,6 @@ use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::Build;
-use crate::parser::Token;
 use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
 use crate::state::State;
@@ -21,30 +20,15 @@ pub fn proxy_inlay_hint(
     let Some(mut bundle_range) = bundle.forward_src_range(&params.range, &doc.source) else {
         return Box::pin(async move { Err(Error::forward_failed()) });
     };
+    let first_non_include_build_pos = doc.first_non_include_build_pos(&bundle);
 
-    let tokens = &doc.parse.compressed_tokens;
-    let first_non_include_pos = tokens
-        .iter()
-        .rposition(|token| matches!(token, Token::IncludePath(_)))
-        .map(|include_idx| tokens.get(include_idx + 1))
-        .unwrap_or(tokens.first())
-        .map(|token| match token {
-            Token::Include(_) | Token::IncludePath(_) => unreachable!(),
-            Token::RegionOpen(s) | Token::RegionClose(s) => s.line_col.clone(),
-            Token::LineTerminator(lc) | Token::Eoi(lc) => lc.clone(),
-            Token::Common(rt) | Token::CommonWithLineEnding(rt) => rt.line_col.clone(),
-        })
-        .map(|line_col| lsp::Position::new(line_col.line, line_col.col))
-        .map(|source_pos| bundle.forward_src_position(&source_pos, &doc.source))
-        .map(Option::unwrap);
-
-    if let Some(source_start) = first_non_include_pos
+    if let Some(source_start) = first_non_include_build_pos
         && source_start > bundle_range.end
     {
         return Box::pin(async move { Err(Error::forward_failed()) });
     }
 
-    if let Some(source_start) = first_non_include_pos
+    if let Some(source_start) = first_non_include_build_pos
         && source_start > bundle_range.start
     {
         bundle_range.start = source_start;

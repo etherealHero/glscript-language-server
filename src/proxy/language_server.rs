@@ -6,6 +6,7 @@ use crate::builder::Build;
 use crate::proxy::{JS_LANG_ID, Proxy, ResFut};
 use crate::types::Source;
 
+mod code_action;
 mod common_features;
 mod completion;
 mod definition;
@@ -136,7 +137,9 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::SemanticTokensRangeRequest, _>(semantic_tokens::proxy_semantic_tokens_range)
         .request::<R::Formatting, _>(formatting::proxy_formatting)
         .request::<R::RangeFormatting, _>(formatting::proxy_range_formatting)
-        .request::<R::InlayHintRequest, _>(inlay_hint::proxy_inlay_hint);
+        .request::<R::InlayHintRequest, _>(inlay_hint::proxy_inlay_hint)
+        .request::<R::CodeActionRequest, _>(code_action::proxy_code_action)
+        .request::<R::ExecuteCommand, _>(code_action::proxy_execute_command);
     router
 }
 
