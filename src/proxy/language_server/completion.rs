@@ -37,6 +37,11 @@ fn get_completions(
             if item.label.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
                 return None;
             };
+            match item.kind {
+                Some(lsp::CompletionItemKind::FOLDER) => item.sort_text = Some("1".into()),
+                Some(lsp::CompletionItemKind::FILE) => item.sort_text = Some("2".into()),
+                _ => {}
+            };
             forward(&mut item);
             Some(item)
         };
