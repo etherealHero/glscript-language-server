@@ -24,9 +24,6 @@ impl State {
 
         self.project.set(path).expect(msg);
         self.work_done_progress_token.set(ident).expect(msg);
-
-        // TODO: configure in client on release
-        self.diagnostics_compatibility.set(false).expect(msg);
     }
 
     pub fn get_project(&self) -> &PathBuf {
@@ -43,10 +40,6 @@ impl State {
 
     pub fn get_token_types_capabilities(&self) -> Option<&Vec<lsp::SemanticTokenType>> {
         self.token_types_capabilities.get()
-    }
-
-    pub fn is_diagnostics_enabled(&self) -> bool {
-        *(self.diagnostics_compatibility.get().unwrap_or(&false))
     }
 
     /// called once after initialization of proxy and tsserver

@@ -10,13 +10,6 @@ use crate::proxy::{DEFAULT_TIMEOUT_MS, PROXY_WORKSPACE, Proxy, ResFut};
 pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut<R::Initialize> {
     const JSCONFIG: &str = "jsconfig.json";
 
-    if !this.state.is_diagnostics_enabled()
-        && let Some(d) = params.capabilities.text_document.as_mut()
-    {
-        d.publish_diagnostics = None;
-        d.diagnostic = None;
-    }
-
     if let Some([root_ws, ..]) = params.workspace_folders.as_deref_mut() {
         let ws_dir = &root_ws.uri.to_file_path().unwrap();
         let proxy_ws_dir = &mut ws_dir.clone().join(PROXY_WORKSPACE);

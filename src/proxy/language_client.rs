@@ -94,6 +94,11 @@ impl LanguageClient for Proxy {
 
         let mut client = self.client();
         let state = self.state.clone();
+
+        if state.get_transpile(&params.uri).is_some() {
+            return std::ops::ControlFlow::Continue(());
+        }
+
         let Some(any_build) = state.get_any_build_by_emit_uri(&params.uri) else {
             tracing::warn!("{}", Error::unbuild_fallback());
             let _ = client.publish_diagnostics(params);
@@ -126,6 +131,7 @@ impl LanguageClient for Proxy {
                     "2304" /* cannot find name */ => Some(DS::WARNING),
                     "2364" /* assignment err */ => Some(DS::ERROR),
                     "2551" /* similar ident */ => Some(DS::INFORMATION),
+                    c if c.len() == 4 && c.starts_with("1") => Some(DS::ERROR), // syntactic errors
                     _ => Some(DS::HINT),
                 }
             } else {

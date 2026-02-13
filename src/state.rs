@@ -28,7 +28,6 @@ pub struct State {
 
     project: Arc<OnceLock<PathBuf>>,
     token_types_capabilities: Arc<OnceLock<Vec<lsp::SemanticTokenType>>>,
-    diagnostics_compatibility: Arc<OnceLock<bool>>,
     tsserver_initialized: Arc<OnceLock<bool>>,
 
     documents: DashMap<PathBuf, Document>,

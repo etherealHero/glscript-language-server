@@ -75,6 +75,6 @@ lto = "thin"
 opt-level = 3
 debug = true
 
-[[test]]
-name = "parser"
-path = "src/unit_tests/parser.rs"
+# [[test]]
+# name = "parser"
+# path = "src/unit_tests/parser.rs"

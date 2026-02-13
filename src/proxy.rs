@@ -20,7 +20,7 @@ mod tracing_formatter;
 pub const JS_LANG_ID: &str = "javascript";
 pub const JS_FILE_EXT: &str = ".js";
 pub const DECL_FILE_EXT: &str = ".d.ts";
-pub const PROXY_WORKSPACE: &str = "./.local/gls-proxy-workspace";
+pub const PROXY_WORKSPACE: &str = "./.local/glproxy-workspace";
 pub const DEFAULT_SCRIPT_FILENAME: &str = "DEFAULT_INCLUDED.js";
 pub const DEFAULT_TIMEOUT_MS: u64 = 5000;
 
