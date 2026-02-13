@@ -10,6 +10,12 @@ use crate::try_ensure_bundle;
 pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) -> NotifyResult {
     let s = &mut this.server();
     let doc = &params.text_document;
+    let uri = &params.text_document.uri;
+
+    if this.state.get_bundle_by_emit_uri(uri).is_some() {
+        return std::ops::ControlFlow::Continue(());
+    }
+
     if doc.language_id == JS_LANG_ID && !doc.uri.as_str().ends_with(EMIT_FILE_EXT) {
         let res = this.state.set_doc(
             &doc.uri,

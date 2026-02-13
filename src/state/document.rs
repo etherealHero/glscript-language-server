@@ -32,7 +32,7 @@ impl State {
                 let uri_fail = |_| anyhow::anyhow!("create uri failed");
                 let try_uri = |n: String| Uri::from_file_path(proxy_ws.join(n)).map_err(uri_fail);
                 let ident = source_ident.as_str();
-                let bundle_uri = try_uri(format!("bundle.{ident}.js"))?;
+                let bundle_uri = try_uri(format!("_bundle.{ident}.js"))?;
                 let transpiled_doc_uri = try_uri(path.to_str().unwrap().to_string())?;
 
                 (bundle_uri, transpiled_doc_uri)
