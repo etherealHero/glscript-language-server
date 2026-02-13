@@ -1,8 +1,11 @@
+use std::time::Duration;
+use tokio::time::timeout;
+
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::proxy::language_server::{Error, NotifyResult};
-use crate::proxy::{PROXY_WORKSPACE, Proxy, ResFut};
+use crate::proxy::{DEFAULT_TIMEOUT_MS, PROXY_WORKSPACE, Proxy, ResFut};
 
 pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut<R::Initialize> {
     const JSCONFIG: &str = "jsconfig.json";
@@ -14,9 +17,6 @@ pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut
         d.diagnostic = None;
     }
 
-    // FIXME: if node_modules not installed show user error
-    // FIXME: if client not has workspace_folders show client Error message for open Project Folder
-    // TODO: if workspace_folders.len() > 2 show error for unsupported
     if let Some([root_ws, ..]) = params.workspace_folders.as_deref_mut() {
         let ws_dir = &root_ws.uri.to_file_path().unwrap();
         let proxy_ws_dir = &mut ws_dir.clone().join(PROXY_WORKSPACE);
@@ -51,7 +51,18 @@ pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut
     }
 
     let mut service = this.server();
-    Box::pin(async move { service.initialize(params).await.map_err(Error::internal) })
+
+    Box::pin(async move {
+        let req = service.initialize(params);
+        let res = timeout(Duration::from_millis(DEFAULT_TIMEOUT_MS), req)
+            .await
+            .unwrap_or(Err(async_lsp::Error::Response(Error::internal("timeout"))));
+
+        match res.map_err(Error::internal) {
+            Err(_) => std::process::exit(1),
+            Ok(r) => Ok(r),
+        }
+    })
 }
 
 pub fn initialized(this: &mut Proxy, params: lsp::InitializedParams) -> NotifyResult {

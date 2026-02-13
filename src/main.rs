@@ -64,8 +64,14 @@ async fn main() {
     let stdout = tokio::io::stdout().compat_write();
     let main2 = tokio::spawn(mock_server.run_buffered(stdin, stdout));
 
-    let _ = tokio::select! {
+    let res = tokio::select! {
         ret = main1 => ret,
         ret = main2 => ret,
     };
+
+    if let Ok(Err(async_lsp::Error::Io(err))) = res {
+        let _ = child.kill();
+        tracing::error!("{err:#?}");
+        std::process::exit(1);
+    }
 }
