@@ -50,16 +50,16 @@ impl State {
         self.uncommitted_transpile_changes.remove(path);
     }
 
-    pub fn get_build_by_emit_uri(&self, emit_uri: &Uri) -> Option<Arc<Build>> {
-        let emit_uri_canonicalized = emit_uri.try_canonicalize();
-        let get_build = |s: &BuildStorage| {
-            s.iter()
-                .find(|e| e.build.uri.canonicalize().unwrap() == emit_uri_canonicalized)
-                .map(|e| e.build.clone())
-        };
-        match get_build(&self.doc_to_bundle) {
+    pub fn get_bundle_by_emit_uri(&self, emit_uri: &Uri) -> Option<Arc<Build>> {
+        let emit_uri_canonicalized = &emit_uri.try_canonicalize();
+        self.get_build_by_emit_uri(&self.doc_to_bundle, emit_uri_canonicalized)
+    }
+
+    pub fn get_any_build_by_emit_uri(&self, emit_uri: &Uri) -> Option<Arc<Build>> {
+        let emit_uri_canonicalized = &emit_uri.try_canonicalize();
+        match self.get_build_by_emit_uri(&self.doc_to_bundle, emit_uri_canonicalized) {
             Some(build) => build.into(),
-            None => get_build(&self.doc_to_transpile),
+            None => self.get_build_by_emit_uri(&self.doc_to_transpile, emit_uri_canonicalized),
         }
     }
 
@@ -113,5 +113,11 @@ impl State {
     fn get_build_from_storage(&self, source_uri: &Uri, s: &BuildStorage) -> Option<Arc<Build>> {
         let path = self.uri_to_path(source_uri).ok()?;
         s.get(&path).map(|guard| guard.build.clone())
+    }
+
+    fn get_build_by_emit_uri(&self, s: &BuildStorage, emit_uri: &Uri) -> Option<Arc<Build>> {
+        s.iter()
+            .find(|e| &e.build.uri.canonicalize().unwrap() == emit_uri)
+            .map(|e| e.build.clone())
     }
 }

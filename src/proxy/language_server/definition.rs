@@ -76,7 +76,7 @@ fn forward(
             continue;
         }
 
-        if let Some(ref any_build) = state.get_build_by_emit_uri(&link.target_uri) {
+        if let Some(ref any_build) = state.get_any_build_by_emit_uri(&link.target_uri) {
             let source = forward_build_range(&mut link.target_range, any_build)?;
 
             if !req_bundle_sources.contains(&source) {

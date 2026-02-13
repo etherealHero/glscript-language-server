@@ -17,7 +17,11 @@ pub fn proxy_signature_help(
     let uri = &params.text_document_position_params.text_document.uri;
     let bundle = try_ensure_bundle!(this, uri, params, signature_help);
     let state = this.state.clone();
+    let doc = state.get_doc(uri).unwrap();
     Box::pin(async move {
+        if doc.is_inside_include_path(&params.text_document_position_params.position) {
+            return Ok(None);
+        }
         let doc_pos = &mut params.text_document_position_params;
         try_forward_text_document_position_params!(state, bundle, doc_pos);
         s.signature_help(params).await.map_err(Error::internal)
@@ -65,7 +69,11 @@ pub fn proxy_prepare_rename(
     let uri = &params.text_document.uri;
     let bundle = try_ensure_bundle!(this, uri, params, prepare_rename);
     let state = this.state.clone();
+    let doc = this.state.get_doc(&params.text_document.uri).unwrap();
     Box::pin(async move {
+        if doc.is_inside_include_path(&params.position) {
+            return Ok(None);
+        };
         try_forward_text_document_position_params!(state, bundle, params);
         let mut res = s.prepare_rename(params).await.map_err(Error::internal);
         if let Ok(Some(lsp::PrepareRenameResponse::Range(ref mut r))) = res {

@@ -71,7 +71,7 @@ fn forward_label(h: &lsp::InlayHint, st: &State) -> Option<lsp::InlayHintLabel> 
     let forward_location = |location: &Option<lsp::Location>| {
         let mut l = location.clone()?;
         // TODO: refactor like this:
-        let Some(build) = st.get_build_by_emit_uri(&l.uri) else {
+        let Some(build) = st.get_any_build_by_emit_uri(&l.uri) else {
             return l.into();
         };
         let source = forward_build_range(&mut l.range, &build).ok()?;

@@ -21,7 +21,7 @@ pub fn proxy_code_action(
     if let Some(source_start) = first_non_include_build_pos
         && source_start > bundle_range.end
     {
-        tracing::warn!("proxy_code_action not supported before import stmt",);
+        // tracing::warn!("proxy_code_action not supported before import stmt",);
         return Box::pin(async move { Ok(None) });
     }
 
@@ -57,7 +57,10 @@ pub fn proxy_code_action(
                     .collect(),
             )),
             Ok(None) => Ok(None),
-            Err(err) => Err(err),
+            Err(err) => {
+                tracing::info!("tsserer error: {err}");
+                Ok(None)
+            }
         }
     })
 }

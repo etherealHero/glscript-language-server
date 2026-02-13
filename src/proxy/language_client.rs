@@ -62,7 +62,7 @@ impl LanguageClient for Proxy {
         // TODO: if the request intersects more then one build
         // (ex.: multiply build references rename req)
         changes.into_iter().for_each(|(uri, edits)| {
-            let Some(any_build) = st.get_build_by_emit_uri(&uri) else {
+            let Some(any_build) = st.get_any_build_by_emit_uri(&uri) else {
                 // TODO: tsserver maybe return intersects edits
                 // by any_build & source file (which included in this any_build)
                 source_changes.insert(uri, edits);
@@ -94,7 +94,7 @@ impl LanguageClient for Proxy {
 
         let mut client = self.client();
         let state = self.state.clone();
-        let Some(any_build) = state.get_build_by_emit_uri(&params.uri) else {
+        let Some(any_build) = state.get_any_build_by_emit_uri(&params.uri) else {
             tracing::warn!("{}", Error::unbuild_fallback());
             let _ = client.publish_diagnostics(params);
             return std::ops::ControlFlow::Continue(());
@@ -135,7 +135,7 @@ impl LanguageClient for Proxy {
             let related_information = if let Some(related_information) = d.related_information {
                 let mut source_related_information = Vec::with_capacity(related_information.len());
                 for ri in related_information {
-                    let Some(any_build) = state.get_build_by_emit_uri(&ri.location.uri) else {
+                    let Some(any_build) = state.get_any_build_by_emit_uri(&ri.location.uri) else {
                         continue;
                     };
                     let mut source_ri_range = ri.location.range;

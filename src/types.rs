@@ -51,6 +51,22 @@ impl Document {
             .map(|source_pos| build.forward_src_position(&source_pos, &self.source))
             .map(Option::unwrap)
     }
+
+    pub fn is_inside_include_path(&self, source_pos: &lsp::Position) -> bool {
+        use rayon::prelude::*;
+
+        self.parse.compressed_tokens.par_iter().any(|t| match &t {
+            Token::IncludePath(s) => {
+                let lc = &s.line_col;
+                let start = lsp::Position::new(lc.line, lc.col);
+                let end = lsp::Position::new(lc.line, lc.col + s.lit.len() as u32 + 2);
+                let s_range = lsp::Range::new(start, end);
+                let p_range = lsp::Range::new(*source_pos, *source_pos);
+                s_range.start <= p_range.end && p_range.start <= s_range.end
+            }
+            _ => false,
+        })
+    }
 }
 
 // TODO: refactor with from SourceMap::Token, LSP Uri (< SourceUri)
