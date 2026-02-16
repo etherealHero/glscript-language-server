@@ -11,7 +11,7 @@ macro_rules! try_ensure_bundle {
             bundle
         } else {
             use $crate::proxy::language_server::Error;
-            tracing::warn!("{}", Error::unbuild_fallback());
+            tracing::info!("{}", Error::unbuild_fallback());
             let mut service = $self.server();
             return Box::pin(
                 async move { service.$method($params).await.map_err(Error::internal) },
@@ -33,7 +33,7 @@ macro_rules! try_ensure_transpile {
             transpile
         } else {
             use $crate::proxy::language_server::Error;
-            tracing::warn!("{}", Error::unbuild_fallback());
+            tracing::info!("{}", Error::unbuild_fallback());
             let mut service = $self.server();
             return Box::pin(
                 async move { service.$method($params).await.map_err(Error::internal) },

@@ -43,6 +43,7 @@ impl Error {
         ResponseError::new(ErrorCode::REQUEST_FAILED, err)
     }
 
+    #[tracing::instrument(skip_all)]
     pub fn forward_failed() -> ResponseError {
         ResponseError::new(ErrorCode::REQUEST_FAILED, "Forward failed")
     }

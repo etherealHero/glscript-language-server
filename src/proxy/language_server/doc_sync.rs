@@ -115,8 +115,9 @@ pub fn proxy_did_change_watched_files(
     let mut forward_changes = Vec::with_capacity(params.changes.len());
     for channge in params.changes {
         let is_emit_file = !channge.uri.as_str().ends_with(EMIT_FILE_EXT);
+        let is_build = this.state.get_any_build_by_emit_uri(&channge.uri).is_some();
 
-        if is_emit_file {
+        if is_emit_file || is_build {
             continue;
         }
 
@@ -141,6 +142,10 @@ pub fn proxy_sync_doc_by_code_lens_request(
     let state = this.state.clone();
     if state.get_current_doc() != Some(uri.try_canonicalize()) {
         state.set_current_doc(uri);
+
+        if let Some(bundle) = state.get_bundle(uri) {
+            bundle.save_on_disk(&state)
+        }
     }
     try_ensure_bundle!(this, uri, params, code_lens);
     Box::pin(async move { Ok(Some(vec![])) }) // TODO:

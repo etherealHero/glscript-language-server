@@ -2,7 +2,7 @@ use async_lsp::lsp_types::Url as Uri;
 use derive_more::Constructor;
 use std::collections::HashSet;
 
-use crate::types::SourceHash;
+use crate::{state::State, types::SourceHash};
 
 use options_builder::BuildOptions;
 pub use options_builder::BuildOptionsBuilder;
@@ -15,7 +15,7 @@ mod forwarding;
 mod options_builder;
 mod source_map_builder;
 
-pub const EMIT_FILE_EXT: &str = ".emitted";
+pub const EMIT_FILE_EXT: &str = ".emitted.js";
 
 #[derive(Debug, Constructor)]
 pub struct Build {
@@ -51,6 +51,28 @@ impl Build {
         debug_assert!(sources.iter().any(|s| SourceHash::new(s) == pat_source));
 
         Ok(build_with_tree_shaking)
+    }
+
+    pub fn save_on_disk(&self, state: &State) {
+        use crate::proxy::PROXY_WORKSPACE;
+        use base64::prelude::{BASE64_STANDARD, Engine as _};
+
+        let mut sm_json = Vec::new();
+        let mut source_map = self.source_map.clone();
+
+        source_map.set_source_root("../../".into());
+        source_map.to_writer(&mut sm_json).unwrap();
+
+        let sm_base64 = BASE64_STANDARD.encode(&sm_json);
+        let build = format!(
+            "{}\n//# sourceMappingURL=data:application/json;base64,{sm_base64}",
+            &self.content,
+        );
+        let proxy_ws = state.get_project().join(PROXY_WORKSPACE);
+        let debug_filepath = proxy_ws.join("./_debug".to_owned() + EMIT_FILE_EXT);
+
+        std::fs::create_dir_all(debug_filepath.parent().unwrap()).unwrap();
+        std::fs::write(debug_filepath.clone(), build).unwrap();
     }
 }
 

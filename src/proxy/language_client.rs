@@ -100,7 +100,7 @@ impl LanguageClient for Proxy {
         }
 
         let Some(any_build) = state.get_any_build_by_emit_uri(&params.uri) else {
-            tracing::warn!("{}", Error::unbuild_fallback());
+            tracing::info!("{}", Error::unbuild_fallback());
             let _ = client.publish_diagnostics(params);
             return std::ops::ControlFlow::Continue(());
         };
@@ -126,7 +126,7 @@ impl LanguageClient for Proxy {
                 NS::String(id) => id.clone(),
             }) {
                 match code.as_str() { // https://typescript.tv/errors/
-                    "7006" /* any type */ => return None,
+                    // "7006" /* any type */ => return None,
                     "80002" /* recommend class decl */ => return None,
                     "2304" /* cannot find name */ => Some(DS::WARNING),
                     "2364" /* assignment err */ => Some(DS::ERROR),
