@@ -9,6 +9,15 @@ pub fn proxy_code_action(
     this: &mut Proxy,
     mut params: lsp::CodeActionParams,
 ) -> ResFut<R::CodeActionRequest> {
+    if params
+        .context
+        .trigger_kind
+        .is_some_and(|k| lsp::CodeActionTriggerKind::AUTOMATIC == k)
+    {
+        // client send recoursive req sequence (code_action -> publish_diagnostics -> code_action...)
+        return Box::pin(async move { Ok(None) });
+    };
+
     let mut s = this.server();
     let uri = &params.text_document.uri;
     let bundle = try_ensure_bundle!(this, uri, params, code_action);
