@@ -39,7 +39,14 @@ fn get_completions(
             };
             match item.kind {
                 Some(lsp::CompletionItemKind::FOLDER) => item.sort_text = Some("1".into()),
-                Some(lsp::CompletionItemKind::FILE) => item.sort_text = Some("2".into()),
+                Some(lsp::CompletionItemKind::FILE) => {
+                    item.sort_text = Some("2".into());
+                    if let Some(d) = item.detail.as_ref()
+                        && d.contains(&item.label)
+                    {
+                        item.insert_text = d.clone().into(); // push file ext
+                    }
+                }
                 _ => {}
             };
             forward(&mut item);
