@@ -228,16 +228,16 @@ async fn get_definition_location(
     definition_request: ResFut<R::GotoDefinition>,
 ) -> Result<lsp::LocationLink, ResponseError> {
     let definition_response = definition_request.await;
-    let message = "Definition of references request not found";
+    let message = "Definition of references request not found ".to_owned();
     match definition_response {
         Ok(Some(ref definition)) => match definition {
             DefRes::Link(links) => match links.first() {
                 Some(def_loc) => Ok(def_loc.to_owned()),
-                None => Err(Error::request_failed(message)),
+                None => Err(Error::request_failed(message + "([])")),
             },
             _ => unreachable!(),
         },
-        Ok(None) => Err(Error::request_failed(message)),
+        Ok(None) => Err(Error::request_failed(message + "(None)")),
         Err(err) => Err(err),
     }
 }
