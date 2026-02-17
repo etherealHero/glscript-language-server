@@ -2,19 +2,22 @@
 
 Glscript-language-server is a language server that provides IDE functionality for writing glscript programs. You can use it with any editor that supports the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/) (VS Code, Vim, Emacs, Zed, etc).
 
-## Requirements
-
-- [NodeJS](https://nodejs.org/en)
-- typescript & tsserver dependencies (version ^5 of tsserver not supported yet)
-  ```sh
-  npm i -D typescript typescript-language-server@4
-  ```
-
 ## Installation
 
-**For Visual Studio Code:**
+### Prerequisites
 
-- Install [Generic LSP Proxy](https://marketplace.visualstudio.com/items?itemName=mjmorales.generic-lsp-proxy) extension then add `.vscode/lsp-proxy.json` config with same contents[[1]](https://github.com/mjmorales/vscode-generic-lsp-proxy?tab=readme-ov-file#example-configurations)[[2]](https://github.com/typescript-language-server/typescript-language-server/blob/master/docs/configuration.md#preferences-options):
+1. [NodeJS](https://nodejs.org/en)
+2. typescript & tsserver dependencies (version ^5 of tsserver not supported yet)
+     ```sh
+     npm i -D typescript typescript-language-server@4
+     ```
+
+### Setup
+
+<details>
+<summary>Visual Studio Code</summary>
+
+1. Install [Generic LSP Proxy](https://marketplace.visualstudio.com/items?itemName=mjmorales.generic-lsp-proxy) extension then add `<project_dir>/.vscode/lsp-proxy.json` config with same contents[[1]](https://github.com/mjmorales/vscode-generic-lsp-proxy?tab=readme-ov-file#example-configurations)[[2]](https://github.com/typescript-language-server/typescript-language-server/blob/master/docs/configuration.md#preferences-options):
   ```json
   [
     {
@@ -26,12 +29,15 @@ Glscript-language-server is a language server that provides IDE functionality fo
       "fileExtensions": [
         ".ts",
         ".js"
-      ]
+      ],
+      "initializationOptions": {
+        "locale": "en"
+      }
     }
   ]
   ```
 
-- Add `.vscode/launch.json` for debugging[[1]](https://code.visualstudio.com/docs/debugtest/debugging)[[2]](https://code.visualstudio.com/docs/debugtest/debugging-configuration):
+2. Add `<project_dir>/.vscode/launch.json` for debugging[[1]](https://code.visualstudio.com/docs/debugtest/debugging)[[2]](https://code.visualstudio.com/docs/debugtest/debugging-configuration):
   ``` json
   {
     "version": "0.2.0",
@@ -47,6 +53,49 @@ Glscript-language-server is a language server that provides IDE functionality fo
     ]
   }
   ```
+
+3. Prefer disable builtin TypeScript extension. Both services built TypeScript & glscript-language-server can work improperly. Press <kbd>Ctrl+Shift+X</kbd>, type in search input "`@builtin TypeScript and JavaScript Language Features`" and disable builtin extension.
+</details>
+
+<details>
+<summary>WebStorm</summary>
+
+1. Install [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij) plugin.
+
+2. Add new language server [(User guide)](https://github.com/redhat-developer/lsp4ij/blob/main/docs/UserDefinedLanguageServer.md):
+
+  **Server**
+
+  | Field   | Value                                                                                                                |
+  | ------- | -------------------------------------------------------------------------------------------------------------------- |
+  | Name    | glscript-language-server                                                                                             |
+  | Command | `$PROJECT_DIR$/.local/glscript-language-server.exe $PROJECT_DIR$/node_modules/.bin/typescript-language-server.cmd` |
+
+  **Mappings / File type**
+
+  | File type  | Language Id |
+  | ---------- | ----------- |
+  | JavaScript | javascript  |
+  | TypeScript | typescript  |
+
+  **Mappings / File name patterns**
+
+  | File name patterns | Language Id |
+  | ------------------ | ----------- |
+  | *.js               | javascript  |
+  | *.ts               | typescript  |
+
+  **Configuration / Server / Initialization Options[[1]](https://github.com/typescript-language-server/typescript-language-server/blob/master/docs/configuration.md#preferences-options)**
+
+  ```json
+  {
+    "locale": "en"
+  }
+  ```
+
+3. Prefer disable builtin JavaScript, TypeScript language support. Both services can work improperly.
+
+</details>
 
 ## References
 
