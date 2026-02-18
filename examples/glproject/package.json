@@ -1,0 +1,9 @@
+{
+  "name": "glproject",
+  "version": "1.0.0",
+  "description": "example glscript project",
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "typescript-language-server": "^4.4.1"
+  }
+}

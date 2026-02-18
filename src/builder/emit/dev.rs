@@ -16,15 +16,18 @@ pub fn emit_on_disk(
         &content, sm_base64
     );
     let debug_source = match opt.resolve_deps {
-        true => doc.source.to_string() + EMIT_FILE_EXT,
-        false => doc.source.to_string() + ".transpiled" + EMIT_FILE_EXT,
+        true => doc.source.to_string() + ".bundle" + EMIT_FILE_EXT,
+        false => doc.source.to_string() + ".transpile" + EMIT_FILE_EXT,
     };
     let proxy_ws = opt.st.get_project().join(PROXY_WORKSPACE);
     let debug_filepath = proxy_ws.join("./debug").join(debug_source);
-    let mut sourcemap_file = debug_filepath.clone();
-    sourcemap_file.add_extension("map");
+
     std::fs::create_dir_all(debug_filepath.parent().unwrap()).unwrap();
     std::fs::write(debug_filepath.clone(), build).unwrap();
-    std::fs::write(sourcemap_file, String::from_utf8(sm_json)?).unwrap();
+
+    // let mut sourcemap_file = debug_filepath.clone();
+    // sourcemap_file.add_extension("map");
+    // std::fs::write(sourcemap_file, String::from_utf8(sm_json)?).unwrap();
+
     Ok(())
 }

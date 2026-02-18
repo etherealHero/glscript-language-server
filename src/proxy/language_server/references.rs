@@ -7,7 +7,7 @@ use async_lsp::lsp_types::{Url as Uri, request as R};
 use async_lsp::{LanguageClient, LanguageServer, ResponseError, lsp_types as lsp};
 use tokio::time::{Duration, timeout};
 
-use crate::builder::Build;
+use crate::builder::{Build, EMIT_FILE_EXT};
 use crate::proxy::language_server::{DefRes, Error, forward_build_range};
 use crate::proxy::language_server::{definition_params, references_params};
 use crate::proxy::language_server::{did_close, did_open};
@@ -144,7 +144,9 @@ async fn traverse(
 
     if let Ok(Some(locations)) = fetch_response {
         for l in locations.into_iter() {
-            workspace_locations.insert(l);
+            if !l.uri.as_str().ends_with(EMIT_FILE_EXT) {
+                workspace_locations.insert(l);
+            }
         }
     }
 

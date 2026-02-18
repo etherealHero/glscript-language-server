@@ -1,0 +1,14 @@
+// This file is included automatically in every script.
+// You do not need to write #include for it.
+// It acts as a global header for your project.
+
+// Include the global script module everywhere.
+// Now all functions from 'global_script.js' are available.
+import   "global_script.js"
+
+// Define a global constant available in all files.
+// Since this runs before other scripts, it is ready to use.
+// @type {string}
+const APP_VERSION = "1.0.0-proxy-demo";
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIi5sb2NhbC9nbHByb3h5LXdvcmtzcGFjZS9kZWZhdWx0X2luY2x1ZGVkLmpzIl0sInNvdXJjZXNDb250ZW50IjpbIi8vIFRoaXMgZmlsZSBpcyBpbmNsdWRlZCBhdXRvbWF0aWNhbGx5IGluIGV2ZXJ5IHNjcmlwdC5cclxuLy8gWW91IGRvIG5vdCBuZWVkIHRvIHdyaXRlICNpbmNsdWRlIGZvciBpdC5cclxuLy8gSXQgYWN0cyBhcyBhIGdsb2JhbCBoZWFkZXIgZm9yIHlvdXIgcHJvamVjdC5cclxuXHJcbi8vIEluY2x1ZGUgdGhlIGdsb2JhbCBzY3JpcHQgbW9kdWxlIGV2ZXJ5d2hlcmUuXHJcbi8vIE5vdyBhbGwgZnVuY3Rpb25zIGZyb20gJ2dsb2JhbF9zY3JpcHQuanMnIGFyZSBhdmFpbGFibGUuXHJcbiNpbmNsdWRlIDxnbG9iYWxfc2NyaXB0LmpzPlxyXG5cclxuLy8gRGVmaW5lIGEgZ2xvYmFsIGNvbnN0YW50IGF2YWlsYWJsZSBpbiBhbGwgZmlsZXMuXHJcbi8vIFNpbmNlIHRoaXMgcnVucyBiZWZvcmUgb3RoZXIgc2NyaXB0cywgaXQgaXMgcmVhZHkgdG8gdXNlLlxyXG4vLyBAdHlwZSB7c3RyaW5nfVxyXG5jb25zdCBBUFBfVkVSU0lPTiA9IFwiMS4wLjAtcHJveHktZGVtb1wiO1xyXG4iXSwibmFtZXMiOltdLCJtYXBwaW5ncyI6IkFBQUE7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0EsUUFBUSxtQkFBbUI7QUFDM0I7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBIn0=

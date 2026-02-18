@@ -1,0 +1,26 @@
+// This is the entry point of the application.
+
+// Explicitly include the math utilities.
+// This inserts the content of math.js right here.
+import   "./utils/math.js"
+import   "utils/math.js" // absolute path supports too
+
+let msg =
+    `Application started.
+`;      
+
+// 'logInfo' comes from global_script.js (included globally).
+// It is available here without any #include directive.
+
+logInfo(msg);
+
+// 'getCircleArea' comes from utils/math.js.
+// It is available here because we included it above.
+let area = getCircleArea(5);
+
+// 'APP_VERSION' comes from DEFAULT_INCLUDED.
+// It is available globally in every file.
+logInfo("Circle area calculated: " + area);
+logInfo("Current system version: " + APP_VERSION);
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbImVudHJ5LmpzIl0sInNvdXJjZXNDb250ZW50IjpbIi8vIFRoaXMgaXMgdGhlIGVudHJ5IHBvaW50IG9mIHRoZSBhcHBsaWNhdGlvbi5cclxuXHJcbi8vIEV4cGxpY2l0bHkgaW5jbHVkZSB0aGUgbWF0aCB1dGlsaXRpZXMuXHJcbi8vIFRoaXMgaW5zZXJ0cyB0aGUgY29udGVudCBvZiBtYXRoLmpzIHJpZ2h0IGhlcmUuXHJcbiNpbmNsdWRlIDwuL3V0aWxzL21hdGguanM+XHJcbiNpbmNsdWRlIDx1dGlscy9tYXRoLmpzPiAvLyBhYnNvbHV0ZSBwYXRoIHN1cHBvcnRzIHRvb1xyXG5cclxubGV0IG1zZyA9XHJcbiN0ZXh0XHJcbkFwcGxpY2F0aW9uIHN0YXJ0ZWQuXHJcbiNlbmR0ZXh0XHJcblxyXG4vLyAnbG9nSW5mbycgY29tZXMgZnJvbSBnbG9iYWxfc2NyaXB0LmpzIChpbmNsdWRlZCBnbG9iYWxseSkuXHJcbi8vIEl0IGlzIGF2YWlsYWJsZSBoZXJlIHdpdGhvdXQgYW55ICNpbmNsdWRlIGRpcmVjdGl2ZS5cclxuXHJcbmxvZ0luZm8obXNnKTtcclxuXHJcbi8vICdnZXRDaXJjbGVBcmVhJyBjb21lcyBmcm9tIHV0aWxzL21hdGguanMuXHJcbi8vIEl0IGlzIGF2YWlsYWJsZSBoZXJlIGJlY2F1c2Ugd2UgaW5jbHVkZWQgaXQgYWJvdmUuXHJcbmxldCBhcmVhID0gZ2V0Q2lyY2xlQXJlYSg1KTtcclxuXHJcbi8vICdBUFBfVkVSU0lPTicgY29tZXMgZnJvbSBERUZBVUxUX0lOQ0xVREVELlxyXG4vLyBJdCBpcyBhdmFpbGFibGUgZ2xvYmFsbHkgaW4gZXZlcnkgZmlsZS5cclxubG9nSW5mbyhcIkNpcmNsZSBhcmVhIGNhbGN1bGF0ZWQ6IFwiICsgYXJlYSk7XHJcbmxvZ0luZm8oXCJDdXJyZW50IHN5c3RlbSB2ZXJzaW9uOiBcIiArIEFQUF9WRVJTSU9OKTtcclxuIl0sIm5hbWVzIjpbXSwibWFwcGluZ3MiOiJBQUFBO0FBQ0E7QUFDQTtBQUNBO0FBQ0EsUUFBUSxrQkFBa0I7QUFDMUIsUUFBUSxnQkFBZ0I7QUFDeEI7QUFDQTtBQUNBLEtBQ0E7QUFDQSxRQUFRO0FBQ1I7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBIn0=

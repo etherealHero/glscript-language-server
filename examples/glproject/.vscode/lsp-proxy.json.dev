@@ -1,0 +1,31 @@
+[
+  {
+    "languageId": "glscript",
+    "command": "cargo",
+    "args": [
+      "run",
+      "--",
+      "./node_modules/.bin/typescript-language-server.cmd"
+    ],
+    "env": {
+      "RUST_BACKTRACE": "full"
+    },
+    "fileExtensions": [
+      ".ts",
+      ".js"
+    ],
+    "initializationOptions": {
+      "preferences": {
+        "interactiveInlayHints": true,
+        "includeInlayVariableTypeHintsWhenTypeMatchesName": false,
+        "includeInlayParameterNameHints": "all",
+        "includeInlayParameterNameHintsWhenArgumentMatchesName": false,
+        "includeInlayFunctionParameterTypeHints": true,
+        "includeInlayVariableTypeHints": true,
+        "includeInlayPropertyDeclarationTypeHints": true,
+        "includeInlayFunctionLikeReturnTypeHints": true,
+        "includeInlayEnumMemberValueHints": true
+      }
+    }
+  }
+]

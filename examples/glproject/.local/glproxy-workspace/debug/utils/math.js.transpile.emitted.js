@@ -1,0 +1,19 @@
+// Note: We did NOT include 'global_script.js' here.
+// But 'logInfo' and 'APP_VERSION' are available because
+// they are defined in the globally included DEFAULT_INCLUDED.
+
+// Using the global variable from DEFAULT_INCLUDED.
+// No import needed, it is injected automatically.
+logInfo("Initializing Math Utils. Version: " + APP_VERSION);
+
+/**
+ * @param {number} radius
+ * @returns {number}
+ */
+function getCircleArea(radius) {
+  // Using the global helper from global_script.js.
+  // It works because DEFAULT_INCLUDED imports global_script.
+  return 3.14 * getSquare(radius);
+}
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInV0aWxzL21hdGguanMiXSwic291cmNlc0NvbnRlbnQiOlsiLy8gTm90ZTogV2UgZGlkIE5PVCBpbmNsdWRlICdnbG9iYWxfc2NyaXB0LmpzJyBoZXJlLlxyXG4vLyBCdXQgJ2xvZ0luZm8nIGFuZCAnQVBQX1ZFUlNJT04nIGFyZSBhdmFpbGFibGUgYmVjYXVzZVxyXG4vLyB0aGV5IGFyZSBkZWZpbmVkIGluIHRoZSBnbG9iYWxseSBpbmNsdWRlZCBERUZBVUxUX0lOQ0xVREVELlxyXG5cclxuLy8gVXNpbmcgdGhlIGdsb2JhbCB2YXJpYWJsZSBmcm9tIERFRkFVTFRfSU5DTFVERUQuXHJcbi8vIE5vIGltcG9ydCBuZWVkZWQsIGl0IGlzIGluamVjdGVkIGF1dG9tYXRpY2FsbHkuXHJcbmxvZ0luZm8oXCJJbml0aWFsaXppbmcgTWF0aCBVdGlscy4gVmVyc2lvbjogXCIgKyBBUFBfVkVSU0lPTik7XHJcblxyXG4vKipcclxuICogQHBhcmFtIHtudW1iZXJ9IHJhZGl1c1xyXG4gKiBAcmV0dXJucyB7bnVtYmVyfVxyXG4gKi9cclxuZnVuY3Rpb24gZ2V0Q2lyY2xlQXJlYShyYWRpdXMpIHtcclxuICAvLyBVc2luZyB0aGUgZ2xvYmFsIGhlbHBlciBmcm9tIGdsb2JhbF9zY3JpcHQuanMuXHJcbiAgLy8gSXQgd29ya3MgYmVjYXVzZSBERUZBVUxUX0lOQ0xVREVEIGltcG9ydHMgZ2xvYmFsX3NjcmlwdC5cclxuICByZXR1cm4gMy4xNCAqIGdldFNxdWFyZShyYWRpdXMpO1xyXG59XHJcbiJdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiQUFBQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0EifQ==

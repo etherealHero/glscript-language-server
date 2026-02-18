@@ -5,6 +5,7 @@ use async_lsp::{LanguageClient, ResponseError};
 
 use crate::proxy::language_server::{Error, forward_build_range};
 use crate::proxy::{Proxy, ResFut};
+use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 
 impl LanguageClient for Proxy {
     type Error = ResponseError;
@@ -127,6 +128,7 @@ impl LanguageClient for Proxy {
             }) {
                 match code.as_str() { // https://typescript.tv/errors/
                     // "7006" /* any type */ => return None,
+                    "2300" /* duplicate identifier */ if d.message.contains(SCRIPT_IDENTIFIER_PREFIX) => return None,
                     "80002" /* recommend class decl */ => return None,
                     "2304" /* cannot find name */ => Some(DS::WARNING),
                     "2364" /* assignment err */ => Some(DS::ERROR),
