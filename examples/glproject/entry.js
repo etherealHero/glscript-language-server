@@ -4,6 +4,7 @@
 // This inserts the content of math.js right here.
 #include <./utils/math.js>
 #include <utils/math.js> // absolute path supports too
+import "utils/math.js" // import syntax supports too
 
 let msg =
 #text

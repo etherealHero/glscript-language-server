@@ -2,19 +2,19 @@
 
 Glscript-language-server is a language server that provides IDE functionality for writing glscript programs. You can use it with any editor that supports the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/) (VS Code, Vim, Emacs, Zed, etc).
 
-After initialization glscript-language-server create proxy workspace for TSServer project with path `<project_dir>/.local/glproxy-workspace/`.
+After initialization, glscript-language-server creates a proxy workspace for the TSServer project located at `<project_dir>/.local/glproxy-workspace/`.
 
-| Glproxy workspace files | Description                                      | Can edit/delete |
-| ----------------------- | ------------------------------------------------ | --------------- |
-| DEFAULT_INCLUDED.js     | includes for all scripts by default for TSServer | ✔️              |
-| \_debug.emitted.js      | synced current client buffer for debug           | \*❌            |
-| \_bundle.<hash>.js      | need for TSServer correct work                   | \*❌            |
-| jsconfig.json           | copied from <project_dir> for TSServer project   | \*\*❌          |
-| debug/\*_/_\*.\*        | emitted files in debug mode (for developers)     | ❌              |
+| Glproxy workspace files | Description                                        | Can edit/delete |
+| ----------------------- | -------------------------------------------------- | --------------- |
+| DEFAULT_INCLUDED.js     | includes for all scripts by default for TSServer   | ✔️              |
+| \_debug.emitted.js      | synced current client buffer for debug             | ❌\*            |
+| \_bundle.<hash>.js      | required for TSServer correct work                 | ❌\*            |
+| jsconfig.json           | copied from <project_dir> for the TSServer project | ❌\*\*          |
+| debug/\*_/_\*.\*        | emitted files in debug mode (for developers)       | ❌              |
 
-\*❌ do not edit/delete this files until you work with project
+\* do not edit or delete these files while working on the project.
 
-\*\*❌ you need edit source jsconfig.json than restart glscript service (glscript rewrites jsconfig into glproxy workspace on init)
+\*\* you should edit the source jsconfig.json and than restart the glscript service (glscript overwrites the jsconfig in the glproxy workspace on init).
 
 ## Installation
 
@@ -28,54 +28,55 @@ After initialization glscript-language-server create proxy workspace for TSServe
 
 ### Setup
 
-1. Download glscript-language-server and move to `<project_dir>/.local/glscript-language-server.exe`
+1. Download glscript-language-server and move it to `<project_dir>/.local/glscript-language-server.exe`
 
-<details>
-<summary>Visual Studio Code</summary>
+2. Configure Language Client
 
-1. Install [Generic LSP Proxy](https://marketplace.visualstudio.com/items?itemName=mjmorales.generic-lsp-proxy) extension then add `<project_dir>/.vscode/lsp-proxy.json` config with same contents[[1]](https://github.com/mjmorales/vscode-generic-lsp-proxy?tab=readme-ov-file#example-configurations)[[2]](https://github.com/typescript-language-server/typescript-language-server/blob/master/docs/configuration.md#preferences-options):
+   <details>
+   <summary>Visual Studio Code</summary>
 
-   ```json
-   [
-     {
-       "languageId": "glscript",
-       "command": "%CD%/.local/glscript-language-server.exe",
-       "args": ["./node_modules/.bin/typescript-language-server.cmd"],
-       "fileExtensions": [".ts", ".js"],
-       "initializationOptions": {
-         "locale": "en"
-       }
-     }
-   ]
-   ```
+   1. Install [Generic LSP Proxy](https://marketplace.visualstudio.com/items?itemName=mjmorales.generic-lsp-proxy) extension. Then, create a configuration file at `<project_dir>/.vscode/lsp-proxy.json` with the following content[[1]](https://github.com/mjmorales/vscode-generic-lsp-proxy?tab=readme-ov-file#example-configurations)[[2]](https://github.com/typescript-language-server/typescript-language-server/blob/master/docs/configuration.md#preferences-options):
 
-2. Add `<project_dir>/.vscode/launch.json` for debugging[[1]](https://code.visualstudio.com/docs/debugtest/debugging)[[2]](https://code.visualstudio.com/docs/debugtest/debugging-configuration):
+      ```json
+      [
+        {
+          "languageId": "glscript",
+          "command": "%CD%/.local/glscript-language-server.exe",
+          "args": ["./node_modules/.bin/typescript-language-server.cmd"],
+          "fileExtensions": [".ts", ".js"],
+          "initializationOptions": {
+            "locale": "en"
+          }
+        }
+      ]
+      ```
 
-   ```json
-   {
-     "version": "0.2.0",
-     "configurations": [
-       {
-         "name": "Debug NodeJS runtime",
-         "type": "node",
-         "request": "launch",
-         "runtimeExecutable": "node",
-         "runtimeArgs": ["--enable-source-maps", "--inspect-brk"],
-         "program": "${workspaceFolder}/.local/glproxy-workspace/_debug.emitted.js"
-       }
-     ]
-   }
-   ```
+   2. Add `<project_dir>/.vscode/launch.json` for debugging[[1]](https://code.visualstudio.com/docs/debugtest/debugging)[[2]](https://code.visualstudio.com/docs/debugtest/debugging-configuration):
 
-3. Prefer disable builtin TypeScript extension. Both services built TypeScript & glscript-language-server can work improperly. Press <kbd>Ctrl+Shift+X</kbd>, type in search input "`@builtin TypeScript and JavaScript Language Features`" and disable builtin extension.
-</details>
+      ```json
+      {
+        "version": "0.2.0",
+        "configurations": [
+          {
+            "name": "Debug NodeJS runtime",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "node",
+            "runtimeArgs": ["--enable-source-maps", "--inspect-brk"],
+            "program": "${workspaceFolder}/.local/glproxy-workspace/_debug.emitted.js"
+          }
+        ]
+      }
+      ```
 
-<details>
-<summary>WebStorm</summary>
+   3. It is recommended to disable the built-in TypeScript extension. Running both the built-in TypeScript service and glscript-language-server simultaneously may cause conflicts. Press <kbd>Ctrl+Shift+X</kbd>, search for "@builtin TypeScript and JavaScript Language Features", and disable that extension.
+   </details>
 
-1. Install [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij) plugin.
+   <details>
+   <summary>WebStorm</summary>
 
-2. Add new language server [(User guide)](https://github.com/redhat-developer/lsp4ij/blob/main/docs/UserDefinedLanguageServer.md):
+   1. Install the [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij) plugin.
+   2. Add a new language server ([User guide](https://github.com/redhat-developer/lsp4ij/blob/main/docs/UserDefinedLanguageServer.md)):
 
    **Server**
 
@@ -106,9 +107,13 @@ After initialization glscript-language-server create proxy workspace for TSServe
    }
    ```
 
-3. Prefer disable builtin JavaScript, TypeScript language support. Both services can work improperly.
+   3. It is recommended to disable the built-in JavaScript and TypeScript language support to avoid conflicts.
 
-</details>
+   </details>
+
+## Examples
+
+For more detailed usage examples, including how to structure your project and use the #include directive, please see the examples directory in the repository.
 
 ## References
 
