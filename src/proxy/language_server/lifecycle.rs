@@ -15,14 +15,14 @@ pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut
         let proxy_ws_dir = &mut ws_dir.clone().join(PROXY_WORKSPACE);
         let jsconfig_content = std::fs::read(ws_dir.join(JSCONFIG))
             .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap()
+            .unwrap_or("{}".to_string())
             .replace("./node_modules/@types", "../../node_modules/@types");
         let token_types = params
             .capabilities
             .text_document
             .as_ref()
             .map(|d| d.semantic_tokens.as_ref().map(|s| s.token_types.clone()))
-            .map(Option::unwrap);
+            .map(|t| t.unwrap_or_default());
 
         std::fs::create_dir_all(&proxy_ws_dir).unwrap();
         std::fs::write(proxy_ws_dir.join(JSCONFIG), jsconfig_content).unwrap();

@@ -1,0 +1,17 @@
+{
+  "name": "transpiler_cli",
+  "version": "1.0.0",
+  "description": "example glscript-language-server usage programatically",
+  "main": "transpiler_cli.js",
+  "scripts": {
+    "transpile": "node transpiler_cli.js"
+  },
+  "dependencies": {
+    "vscode-jsonrpc": "^8.2.0",
+    "vscode-languageserver-protocol": "^3.17.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "typescript-language-server": "^4.4.1"
+  }
+}

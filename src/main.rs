@@ -69,7 +69,7 @@ async fn main() {
         ret = main2 => ret,
     };
 
-    if let Ok(Err(async_lsp::Error::Io(err))) = res {
+    if let Ok(Err(err)) = res {
         let _ = child.kill();
         tracing::error!("{err:#?}");
         std::process::exit(1);
