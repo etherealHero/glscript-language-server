@@ -28,7 +28,7 @@ After initialization, glscript-language-server creates a proxy workspace for the
 
 ### Setup
 
-1. Download glscript-language-server and move it to `<project_dir>/.local/glscript-language-server.exe`
+1. Download glscript-language-server from release page and move it to `<project_dir>/.local/glscript-language-server.exe`
 
 2. Configure Language Client
 
