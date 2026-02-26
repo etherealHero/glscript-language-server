@@ -25,7 +25,8 @@ pub fn proxy_inlay_hint(
     if let Some(source_start) = first_non_include_build_pos
         && source_start > bundle_range.end
     {
-        return Box::pin(async move { Err(Error::forward_failed()) });
+        tracing::warn!("proxy_inlay_hint not supported before import stmt");
+        return Box::pin(async move { Ok(None) });
     }
 
     if let Some(source_start) = first_non_include_build_pos
