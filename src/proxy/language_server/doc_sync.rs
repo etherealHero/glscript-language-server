@@ -2,9 +2,8 @@ use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::EMIT_FILE_EXT;
-use crate::proxy::Canonicalize;
 use crate::proxy::language_server::{did_close, did_open};
-use crate::proxy::{JS_LANG_ID, Proxy, ResFut, language_server::NotifyResult};
+use crate::proxy::{Canonicalize, JS_LANG_ID, NotifyResult, Proxy, ResFut};
 use crate::try_ensure_bundle;
 
 pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) -> NotifyResult {
@@ -26,7 +25,10 @@ pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) 
             }],
         );
 
-        if res.is_err() {
+        if let Err(e) = res {
+            tracing::error!(
+                "Proxy did open failed on set doc. Request will be fallback to plain did open. Error: {e}"
+            );
             let _ = s.did_open(params);
             return std::ops::ControlFlow::Continue(());
         };

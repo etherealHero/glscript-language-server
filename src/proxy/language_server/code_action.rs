@@ -5,8 +5,7 @@ use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::Build;
 use crate::parser::Token;
-use crate::proxy::language_server::Error;
-use crate::proxy::{Proxy, ResFut};
+use crate::proxy::{Error, Proxy, ResFut};
 use crate::state::State;
 use crate::try_ensure_bundle;
 use crate::types::Document;

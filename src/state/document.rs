@@ -127,6 +127,7 @@ impl State {
         }
     }
 
+    /// returns last focused client buffer (canonicalized source_uri)
     pub fn get_current_doc(&self) -> Option<Uri> {
         self.current_doc.lock().unwrap().clone()
     }

@@ -7,12 +7,12 @@ use async_lsp::lsp_types::{Url as Uri, request as R};
 use async_lsp::{LanguageClient, LanguageServer, ResponseError, lsp_types as lsp};
 use tokio::time::{Duration, timeout};
 
-use crate::builder::{Build, EMIT_FILE_EXT};
-use crate::proxy::language_server::{DefRes, Error, forward_build_range};
-use crate::proxy::language_server::{definition_params, references_params};
+use crate::proxy::language_server::{DefRes, definition_params, references_params};
 use crate::proxy::language_server::{did_close, did_open};
-use crate::proxy::{Canonicalize, Proxy, ResFut};
+use crate::proxy::{Canonicalize, Error, Proxy, ResFut, forward_build_range};
 use crate::proxy::{DECL_FILE_EXT, DEFAULT_TIMEOUT_MS, JS_FILE_EXT};
+
+use crate::builder::Build;
 use crate::state::State;
 use crate::types::{SourceHash, SourcePattern};
 use crate::{try_ensure_bundle, try_forward_text_document_position_params};
@@ -135,19 +135,14 @@ async fn traverse(
 
     let req_uri = temp.clone().unwrap_or_else(|| bundle.uri.clone());
     let fwd_params = references_params(req_uri, position);
-    let fetch_response = timeout(
-        Duration::from_millis(DEFAULT_TIMEOUT_MS),
-        fetch_with_build_params(service, st, root, fwd_params, bundle, temp),
-    )
-    .await
-    .unwrap_or(Ok(None));
+    let req = fetch_with_build_params(service, st, root, fwd_params, bundle, temp);
+    let timeout_duration = Duration::from_millis(DEFAULT_TIMEOUT_MS);
+    let Some(locations) = timeout(timeout_duration, req).await.unwrap_or(Ok(None))? else {
+        return Ok(());
+    };
 
-    if let Ok(Some(locations)) = fetch_response {
-        for l in locations.into_iter() {
-            if !l.uri.as_str().ends_with(EMIT_FILE_EXT) {
-                workspace_locations.insert(l);
-            }
-        }
+    for l in locations {
+        workspace_locations.insert(l);
     }
 
     Ok(())

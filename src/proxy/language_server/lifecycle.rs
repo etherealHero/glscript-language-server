@@ -4,8 +4,7 @@ use tokio::time::timeout;
 use async_lsp::lsp_types::{Url as Uri, notification as N, request as R};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
-use crate::proxy::language_server::{Error, NotifyResult};
-use crate::proxy::{DEFAULT_TIMEOUT_MS, PROXY_WORKSPACE, Proxy, ResFut};
+use crate::proxy::{DEFAULT_TIMEOUT_MS, Error, NotifyResult, PROXY_WORKSPACE, Proxy, ResFut};
 
 pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut<R::Initialize> {
     const JSCONFIG: &str = "jsconfig.json";

@@ -10,7 +10,7 @@ macro_rules! try_ensure_bundle {
             $self.state.commit_changes($uri, &mut $self.server());
             bundle
         } else {
-            use $crate::proxy::language_server::Error;
+            use $crate::proxy::Error;
             tracing::info!("{}", Error::unbuild_fallback());
             let mut service = $self.server();
             return Box::pin(
@@ -32,7 +32,7 @@ macro_rules! try_ensure_transpile {
             $self.state.commit_changes($uri, &mut $self.server());
             transpile
         } else {
-            use $crate::proxy::language_server::Error;
+            use $crate::proxy::Error;
             tracing::info!("{}", Error::unbuild_fallback());
             let mut service = $self.server();
             return Box::pin(
@@ -57,7 +57,7 @@ macro_rules! try_forward_text_document_position_params {
             *pos = build_pos;
             *uri = $build.uri.clone();
         } else {
-            use $crate::proxy::language_server::Error;
+            use $crate::proxy::Error;
             return Err(Error::forward_failed());
         };
     }};

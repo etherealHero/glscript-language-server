@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
-use crate::proxy::language_server::{Error, NotifyResult};
-use crate::proxy::language_server::{forward_build_range, references_params};
-use crate::proxy::{Proxy, ResFut};
+use crate::proxy::language_server::references_params;
+use crate::proxy::{Error, NotifyResult, Proxy, ResFut, forward_build_range};
 use crate::try_forward_text_document_position_params;
 use crate::{try_ensure_bundle, try_ensure_transpile};
 

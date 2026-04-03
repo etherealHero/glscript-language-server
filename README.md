@@ -8,7 +8,7 @@ After initialization, glscript-language-server creates a proxy workspace for the
 | ----------------------- | -------------------------------------------------- | --------------- |
 | DEFAULT_INCLUDED.js     | includes for all scripts by default for TSServer   | ✔️              |
 | \_debug.emitted.js      | synced current client buffer for debug             | ❌\*            |
-| \_bundle.<hash>.js      | required for TSServer correct work                 | ❌\*            |
+| \_bundle.\<hash\>.js    | required for TSServer correct work                 | ❌\*            |
 | jsconfig.json           | copied from <project_dir> for the TSServer project | ❌\*\*          |
 | debug/\*_/_\*.\*        | emitted files in debug mode (for developers)       | ❌              |
 
@@ -28,7 +28,7 @@ After initialization, glscript-language-server creates a proxy workspace for the
 
 ### Setup
 
-1. Download glscript-language-server from release page and move it to `<project_dir>/.local/glscript-language-server.exe`
+1. Download glscript-language-server [from Release page](http://gitlab.khf.ru:8080/khf187/glscript-language-server/-/releases) and move it to `<project_dir>/.local/glscript-language-server.exe`
 
 2. Configure Language Client
 
@@ -70,6 +70,8 @@ After initialization, glscript-language-server creates a proxy workspace for the
       ```
 
    3. It is recommended to disable the built-in TypeScript extension. Running both the built-in TypeScript service and glscript-language-server simultaneously may cause conflicts. Press <kbd>Ctrl+Shift+X</kbd>, search for "@builtin TypeScript and JavaScript Language Features", and disable that extension.
+
+   4. Press <kbd>Ctrl+Shift+P</kbd>, search for "LSP Proxy: Reload LSP Configuration", then press <kbd>Enter</kbd>.
    </details>
 
    <details>

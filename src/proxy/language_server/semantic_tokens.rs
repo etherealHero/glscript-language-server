@@ -4,8 +4,7 @@ use derive_more::Constructor;
 use rayon::prelude::*;
 
 use crate::builder::Build;
-use crate::proxy::language_server::{Error, forward_build_range};
-use crate::proxy::{Proxy, ResFut};
+use crate::proxy::{Error, Proxy, ResFut, forward_build_range};
 use crate::state::State;
 use crate::try_ensure_transpile;
 

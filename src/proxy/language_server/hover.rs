@@ -1,9 +1,14 @@
-use async_lsp::lsp_types::request as R;
+use std::str::FromStr;
+
+use async_lsp::lsp_types::{Url as Uri, request as R};
 use async_lsp::{LanguageServer, lsp_types as lsp};
 use tokio::time::{Duration, timeout};
 
-use crate::proxy::language_server::{DefRes, Error, definition_params, forward_build_range};
+use crate::proxy::language_server::{DefRes, definition_params};
 use crate::proxy::{Canonicalize, DECL_FILE_EXT, Proxy, ResFut, ResReqProxy};
+use crate::proxy::{Error, forward_build_range};
+
+use crate::state::State;
 use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 use crate::{try_ensure_bundle, try_forward_text_document_position_params};
 
@@ -26,12 +31,12 @@ pub fn proxy_hover_with_decl_info(
         let doc_pos = &mut params.text_document_position_params;
         try_forward_text_document_position_params!(state, bundle, doc_pos);
 
-        let hover = service.hover(params).await.map_err(Error::internal)?;
-        if hover.is_none() {
+        let Some(hover) = service.hover(params).await.map_err(Error::internal)? else {
             return Ok(None);
-        }
+        };
 
-        let (stripped, mut hover) = strip_module_hash(hover.unwrap());
+        let (stripped, hover) = strip_module_hash(hover);
+        let mut hover = forward_md_links(hover, &state).map_err(|_| Error::forward_failed())?;
 
         if let Some(mut r) = hover.range
             && !forward_build_range(&mut r, &bundle).is_ok_and(|source| source == *req_source)
@@ -121,4 +126,67 @@ fn strip_module_hash(mut hover: lsp::Hover) -> (bool, lsp::Hover) {
     }
 
     (any_matched, hover)
+}
+
+fn forward_md_links(mut hover: lsp::Hover, st: &State) -> anyhow::Result<lsp::Hover> {
+    type H = lsp::HoverContents;
+    type S = lsp::MarkedString;
+
+    let strings: Vec<&mut String> = match &mut hover.contents {
+        H::Scalar(S::String(s)) => vec![s],
+        H::Scalar(S::LanguageString(s)) => vec![&mut s.value],
+        H::Array(items) => items
+            .iter_mut()
+            .map(|item| match item {
+                S::String(s) => s,
+                S::LanguageString(ls) => &mut ls.value,
+            })
+            .collect(),
+        H::Markup(m) => vec![&mut m.value],
+    };
+
+    let re = regex::Regex::new(r"(file:///.+?\..+?\.js)#L(\d+)(%2C|,)(\d+)").unwrap();
+    let project = st.get_project();
+
+    for s in strings {
+        let cow = re.replace_all(s, |caps: &regex::Captures| {
+            let emit_uri_literal = caps.get(1).unwrap().as_str();
+            let line_str = caps.get(2).unwrap().as_str();
+            let sep = caps.get(3).unwrap().as_str();
+            let col_str = caps.get(4).unwrap().as_str();
+
+            let line = line_str.parse::<u32>().unwrap_or(1).saturating_sub(1); // LSP lines 0-based
+            let character = col_str.parse::<u32>().unwrap_or(0);
+
+            match Uri::from_str(emit_uri_literal) {
+                Ok(emit_uri) => {
+                    if let Some(any_build) = st.get_any_build_by_emit_uri(&emit_uri) {
+                        let pos = lsp::Position::new(line, character);
+
+                        if let Some((source_pos, source)) = any_build.forward_build_position(&pos) {
+                            let path = project.join(source.as_str());
+                            if let Ok(source_uri) = st.path_to_uri(&path) {
+                                return format!(
+                                    "{}#L{}{}{}",
+                                    source_uri.as_str(),
+                                    source_pos.line + 1,
+                                    sep,
+                                    source_pos.character
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("Failed to parse emit URI from hover: {}", e),
+            }
+
+            caps.get(0).unwrap().as_str().to_string()
+        });
+
+        if let std::borrow::Cow::Owned(v) = cow {
+            *s = v;
+        }
+    }
+
+    Ok(hover)
 }

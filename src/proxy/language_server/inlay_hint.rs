@@ -4,8 +4,7 @@ use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::Build;
-use crate::proxy::language_server::{Error, forward_build_range};
-use crate::proxy::{Proxy, ResFut};
+use crate::proxy::{Error, Proxy, ResFut, forward_build_range};
 use crate::state::State;
 use crate::try_ensure_bundle;
 
@@ -25,8 +24,7 @@ pub fn proxy_inlay_hint(
     if let Some(source_start) = first_non_include_build_pos
         && source_start > bundle_range.end
     {
-        tracing::warn!("proxy_inlay_hint not supported before import stmt");
-        return Box::pin(async move { Ok(None) });
+        return Box::pin(async move { Err(Error::forward_failed()) });
     }
 
     if let Some(source_start) = first_non_include_build_pos

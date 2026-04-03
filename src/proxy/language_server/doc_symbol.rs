@@ -2,8 +2,7 @@ use async_lsp::lsp_types::request as R;
 use async_lsp::{LanguageServer, lsp_types as lsp};
 
 use crate::builder::Build;
-use crate::proxy::language_server::{Error, forward_build_range};
-use crate::proxy::{Proxy, ResFut};
+use crate::proxy::{Error, Proxy, ResFut, forward_build_range};
 use crate::try_ensure_transpile;
 use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 
