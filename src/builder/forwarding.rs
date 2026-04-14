@@ -63,7 +63,9 @@ impl Build {
             Some(t) if t.get_source().is_none() => None,
             Some(t) => {
                 let line = t.get_src_line();
-                let character = t.get_src_col() + (pos.character - t.get_dst_col());
+                let character = t
+                    .get_src_col()
+                    .saturating_add(pos.character.saturating_sub(t.get_dst_col()));
                 let source = t.get_source().expect("forward back token must have source");
                 Some((
                     lsp::Position::new(line, character),
