@@ -13,12 +13,15 @@ impl Emit {
             Err(_) => return,
         };
         let (source, path, tokens) = (&d.source, &d.path, d.parse.compressed_tokens.iter());
-        let src_id = st.add_source(source.clone());
 
-        match ctx.visited_sources.contains(&d.source_hash) {
-            true => return,
-            false => ctx.visited_sources.insert(d.source_hash),
-        };
+        if ctx.visited_sources.contains(&d.source_hash) {
+            return;
+        }
+
+        ctx.visited_sources.insert(d.source_hash);
+        ctx.source_include_stack.push((*source.clone()).clone());
+
+        let src_id = st.add_source(source.clone(), ctx.source_include_stack.clone());
 
         let c = |h: &HashSet<_>| h.contains(&d.source_hash);
         if ctx.pat_sources.as_ref().map(c) == Some(false) {
@@ -108,27 +111,32 @@ impl Emit {
                 Token::Eoi(t) => add_map(t.col, t, st, lt_ro, lt_ro_offset),
             }
         }
+
+        ctx.source_include_stack.pop();
     }
 
     pub fn line_break(&mut self) {
         match self {
-            Emit::WithSourceMapBuilderAndDstLine(_, dst_line) => *dst_line += 1,
+            Emit::WithSourceMapBuilderAndDstLine(_, dst_line, _) => *dst_line += 1,
             _ => unreachable!(),
         };
     }
 }
 
 impl Emit {
-    fn add_source(&mut self, source: Arc<Source>) -> u32 {
+    fn add_source(&mut self, source: Arc<Source>, mut stack: Vec<Source>) -> u32 {
         match self {
-            Emit::WithSourceMapBuilderAndDstLine(builder, _) => builder.add_source_with_id(source),
+            Emit::WithSourceMapBuilderAndDstLine(builder, _, swis) => {
+                swis.insert(source.clone(), stack.drain(1..).collect());
+                builder.add_source_with_id(source)
+            }
             _ => unreachable!(),
         }
     }
 
     fn add_token(&mut self, dst_col: u32, src_line: u32, src_col: u32, src_id: u32) {
         match self {
-            Emit::WithSourceMapBuilderAndDstLine(builder, dst_line) => {
+            Emit::WithSourceMapBuilderAndDstLine(builder, dst_line, _) => {
                 builder.tokens.push(sourcemap::RawToken {
                     dst_line: *dst_line,
                     dst_col,

@@ -1,7 +1,8 @@
 use async_lsp::lsp_types::Url as Uri;
 use derive_more::Constructor;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use crate::builder::emit::SourcesWithIncludeStack;
 use crate::{state::State, types::SourceHash};
 
 use options_builder::BuildOptions;
@@ -21,6 +22,7 @@ pub const EMIT_FILE_EXT: &str = ".emitted.js";
 pub struct Build {
     pub content: String,
     pub uri: Uri,
+    pub sources_with_include_stack: SourcesWithIncludeStack,
 
     source_map: sourcemap::SourceMap,
     tokens_count: usize,
@@ -101,13 +103,14 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
     let new_ctx = || {
         let visited = HashSet::<SourceHash>::with_capacity(sources_cap);
         let (p, s, i) = (opt.pat.clone(), opt.pat_sources.clone(), opt.resolve_deps);
-        Context::new(opt.st, default_doc, visited, p, s, i, false)
+        Context::new(opt.st, default_doc, visited, p, s, i, false, vec![])
     };
 
     {
         let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
         let dst_line = if opt.resolve_deps { 1 } else { 0 };
-        let mut emit_state = Emit::WithSourceMapBuilderAndDstLine(builder, dst_line);
+        let swis = HashMap::with_capacity(sources_cap);
+        let mut emit_state = Emit::WithSourceMapBuilderAndDstLine(builder, dst_line, swis);
         Emit::prepare_par_iter(&mut emit_state, &mut new_ctx(), opt.uri);
         emit_state.finish(opt.st);
     }
@@ -115,10 +118,12 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
     let sourcemap_task = || {
         let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
         let dst_line = if opt.resolve_deps { 1 } else { 0 };
-        let mut emit_sourcemap_state = Emit::WithSourceMapBuilderAndDstLine(builder, dst_line);
+        let swis = HashMap::with_capacity(sources_cap);
+        let mut emit_sourcemap_state =
+            Emit::WithSourceMapBuilderAndDstLine(builder, dst_line, swis);
         Emit::sourcemap(&mut emit_sourcemap_state, &mut new_ctx(), opt.uri);
         match emit_sourcemap_state.finish(opt.st) {
-            EmitResult::TokensCountAndSourceMap(count, sm) => (count, sm),
+            EmitResult::TokensCountAndSourceMap(count, sm, swis) => (count, sm, swis),
             _ => unreachable!(),
         }
     };
@@ -132,7 +137,7 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
         }
     };
 
-    let ((tokens_count, source_map), (content, pattern_sources)) =
+    let ((tokens_count, source_map, swis), (content, pattern_sources)) =
         rayon::join(sourcemap_task, content_task); // TODO: rebuild only sourcemap on dep_hash eq prev
 
     #[cfg(debug_assertions)]
@@ -143,7 +148,7 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
         false => doc.transpile_uri.as_ref().clone(),
     };
 
-    let build = Build::new(content, emit_uri, source_map, tokens_count);
+    let build = Build::new(content, emit_uri, swis, source_map, tokens_count);
 
     Ok((build, pattern_sources))
 }
