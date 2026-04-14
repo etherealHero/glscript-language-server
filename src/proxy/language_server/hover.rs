@@ -9,7 +9,7 @@ use crate::proxy::{Canonicalize, DECL_FILE_EXT, Proxy, ResFut, ResReqProxy};
 use crate::proxy::{Error, forward_build_range};
 
 use crate::state::State;
-use crate::types::SCRIPT_IDENTIFIER_PREFIX;
+use crate::types::{SCRIPT_IDENTIFIER_PREFIX, Source};
 use crate::{try_ensure_bundle, try_forward_text_document_position_params};
 
 pub fn proxy_hover_with_decl_info(
@@ -63,14 +63,51 @@ pub fn proxy_hover_with_decl_info(
 
             let path = state.uri_to_path(res_uri).unwrap();
             let root = state.get_project();
-            let source = path.strip_prefix(root).unwrap_or(&path).display();
 
             hover = match path.to_str().unwrap().ends_with(DECL_FILE_EXT) {
                 true => prepend_hover(hover, "Built-in symbol"),
-                false => match state.get_default_sources().contains(&path) {
-                    true => prepend_hover(hover, &format!("**Default** included by {source}")),
-                    false => prepend_hover(hover, &format!("Included by {source}")),
-                },
+                false => {
+                    if let Ok(source) = Source::from_path(&path, root) {
+                        let prettify = |s: &Source, with_pos: bool| {
+                            let def_pos = if with_pos {
+                                let start = l.first().unwrap().target_range.start;
+                                format!("#L{},{}", start.line + 1, start.character + 1) // zero-based
+                            } else {
+                                "".to_string()
+                            };
+
+                            let path_to_md_link = |p: std::path::PathBuf| {
+                                Some(format!(
+                                    "[{}]({}{def_pos})",
+                                    p.file_stem().unwrap().to_str().unwrap(),
+                                    Uri::from_file_path(p.clone()).unwrap().as_str()
+                                ))
+                            };
+
+                            Uri::from_file_path(root.join(s.as_str()))
+                                .ok()
+                                .and_then(|uri| state.uri_to_path(&uri).ok())
+                                .and_then(path_to_md_link)
+                                .unwrap_or(s.as_str().to_string())
+                        };
+
+                        let stack = bundle.sources_with_include_stack.get(&source).unwrap();
+                        let stack_last_idx = stack.len() - 1;
+
+                        let stack = stack
+                            .iter()
+                            .enumerate()
+                            .map(|e| prettify(e.1, e.0 == stack_last_idx))
+                            .collect::<Vec<String>>()
+                            .join(" -> ");
+
+                        prepend_hover(hover, &format!("Included from this file -> {stack}"))
+                    } else {
+                        let raw_source = path.strip_prefix(root).unwrap_or(&path).display();
+
+                        prepend_hover(hover, &format!("Included from this file -> {raw_source}"))
+                    }
+                }
             };
         }
 
