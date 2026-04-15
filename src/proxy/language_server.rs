@@ -9,7 +9,6 @@ mod code_action;
 mod common_features;
 mod completion;
 mod definition;
-mod doc_symbol;
 mod doc_sync;
 mod formatting;
 mod hover;
@@ -18,7 +17,7 @@ mod lifecycle;
 mod references;
 mod selection_range;
 mod semantic_tokens;
-mod ws_symbol;
+mod symbol;
 
 pub type DefRes = lsp::GotoDefinitionResponse;
 
@@ -88,9 +87,8 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::PrepareRenameRequest, _>(common_features::proxy_prepare_rename)
         .request::<R::Rename, _>(common_features::proxy_rename)
         .request::<R::SelectionRangeRequest, _>(selection_range::proxy_selection_range)
-        .request::<R::DocumentSymbolRequest, _>(doc_symbol::proxy_document_symbol)
-        .request::<R::WorkspaceSymbolRequest, _>(ws_symbol::proxy_symbol)
-        .request::<R::WorkspaceSymbolResolve, _>(ws_symbol::proxy_workspace_symbol_resolve)
+        .request::<R::DocumentSymbolRequest, _>(symbol::proxy_document_symbol)
+        .request::<R::WorkspaceSymbolRequest, _>(symbol::proxy_workspace_symbol)
         .request::<R::FoldingRangeRequest, _>(common_features::proxy_folding_range)
         .request::<R::SemanticTokensFullRequest, _>(semantic_tokens::proxy_semantic_tokens_full)
         .request::<R::SemanticTokensRangeRequest, _>(semantic_tokens::proxy_semantic_tokens_range)
