@@ -92,6 +92,7 @@ impl State {
         Ok(())
     }
 
+    /// will create uninitialized documents too
     pub fn get_doc(&self, source_uri: &Uri) -> anyhow::Result<Document> {
         let path = &self.uri_to_path(source_uri)?;
         let doc = self.documents.get(path);

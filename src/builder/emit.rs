@@ -16,6 +16,7 @@ mod source_map;
 #[cfg(debug_assertions)]
 pub use dev::emit_on_disk;
 
+#[allow(clippy::too_many_arguments)]
 #[derive(Constructor)]
 pub struct Context<'a> {
     proxy_state: &'a State,

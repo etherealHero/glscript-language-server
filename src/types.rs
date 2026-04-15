@@ -111,13 +111,13 @@ impl PartialEq for TranspileHash {
     }
 }
 
-type DocumentSources<'a> = (
+type DocumentTranspileHashSources<'a> = (
     &'a Vec<Token<'a>>,
     Option<&'a [lsp::TextDocumentContentChangeEvent]>,
 );
 
-impl From<DocumentSources<'_>> for TranspileHash {
-    fn from(doc_sources: DocumentSources<'_>) -> Self {
+impl From<DocumentTranspileHashSources<'_>> for TranspileHash {
+    fn from(doc_sources: DocumentTranspileHashSources<'_>) -> Self {
         let (tokens, changes) = doc_sources;
         let hasher = &mut fxhash::FxHasher64::default();
         let changes = changes.unwrap_or(&[]);
