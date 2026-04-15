@@ -1,9 +1,10 @@
 use async_lsp::lsp_types::Url as Uri;
 use derive_more::Constructor;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use crate::builder::emit::SourcesWithIncludeStack;
-use crate::{state::State, types::SourceHash};
+use crate::types::{Source, SourceHash};
+use crate::{builder::emit::Stack, state::State};
 
 use options_builder::BuildOptions;
 pub use options_builder::BuildOptionsBuilder;
@@ -21,8 +22,12 @@ pub const EMIT_FILE_EXT: &str = ".emitted.js";
 #[derive(Debug, Constructor)]
 pub struct Build {
     pub content: String,
+
+    /// emitted build [`Uri`]
     pub uri: Uri,
-    pub sources_with_include_stack: SourcesWithIncludeStack,
+
+    /// Shows how any [`Source`] resolved by [`Stack`]
+    pub sources_stack: HashMap<Arc<Source>, Stack>,
 
     source_map: sourcemap::SourceMap,
     tokens_count: usize,

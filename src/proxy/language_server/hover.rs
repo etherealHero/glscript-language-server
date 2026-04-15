@@ -91,13 +91,13 @@ pub fn proxy_hover_with_decl_info(
                                 .unwrap_or(s.as_str().to_string())
                         };
 
-                        let stack = bundle.sources_with_include_stack.get(&source).unwrap();
+                        let stack = bundle.sources_stack.get(&source).unwrap();
                         let stack_last_idx = stack.len() - 1;
 
                         let stack = stack
                             .iter()
                             .enumerate()
-                            .map(|e| prettify(e.1, e.0 == stack_last_idx))
+                            .map(|e| prettify(&e.1.0, e.0 == stack_last_idx))
                             .collect::<Vec<String>>()
                             .join(" -> ");
 

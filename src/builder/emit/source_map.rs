@@ -13,15 +13,16 @@ impl Emit {
             Err(_) => return,
         };
         let (source, path, tokens) = (&d.source, &d.path, d.parse.compressed_tokens.iter());
+        let source = (*source.clone()).clone();
 
         if ctx.visited_sources.contains(&d.source_hash) {
             return;
         }
 
         ctx.visited_sources.insert(d.source_hash);
-        ctx.source_include_stack.push((*source.clone()).clone());
+        ctx.stack.push((source, (0, 0).into(), 0));
 
-        let src_id = st.add_source(source.clone(), ctx.source_include_stack.clone());
+        let src_id = st.add_source(d.source.clone(), ctx);
 
         let c = |h: &HashSet<_>| h.contains(&d.source_hash);
         if ctx.pat_sources.as_ref().map(c) == Some(false) {
@@ -55,13 +56,6 @@ impl Emit {
             match t {
                 Token::Include(t) => add_map(t.line_col.col, &t.line_col, st, lt_ro, lt_ro_offset),
                 Token::IncludePath(t) => {
-                    if !ctx.resolve_deps {
-                        let real_col = t.line_col.col - 1;
-                        let pos = &((t.line_col.line, real_col).into());
-                        add_map(real_col, pos, st, lt_ro, lt_ro_offset);
-                        continue;
-                    }
-
                     let dep_path = ctx.proxy_state.path_resolver(path, t.lit);
                     let dep_uri = ctx.proxy_state.path_to_uri(&dep_path);
                     let (left_offset, right_offset, doc_uri) = if let Ok(uri) = dep_uri {
@@ -75,6 +69,23 @@ impl Emit {
                         let stmt = DocumentLinkStatement::undefined();
                         (stmt.left_offset, stmt.right_offset, None)
                     };
+
+                    if !ctx.resolve_deps {
+                        let real_col = t.line_col.col - 1;
+                        let pos = &((t.line_col.line, real_col).into());
+                        add_map(real_col, pos, st, lt_ro, lt_ro_offset);
+
+                        if let Some(dep_uri) = doc_uri {
+                            let dep_source = ctx.proxy_state.get_doc(&dep_uri).unwrap().source;
+                            let arc_dep_source = dep_source.clone();
+                            let dep_source = (*arc_dep_source.clone()).clone();
+                            ctx.stack
+                                .push((dep_source, t.line_col.clone(), t.lit.len()));
+                            st.add_source(arc_dep_source, ctx);
+                        }
+
+                        continue;
+                    }
 
                     st.line_break();
                     st.add_token(left_offset, t.line_col.line, t.line_col.col, src_id);
@@ -112,7 +123,7 @@ impl Emit {
             }
         }
 
-        ctx.source_include_stack.pop();
+        ctx.stack.pop();
     }
 
     pub fn line_break(&mut self) {
@@ -124,10 +135,15 @@ impl Emit {
 }
 
 impl Emit {
-    fn add_source(&mut self, source: Arc<Source>, mut stack: Vec<Source>) -> u32 {
+    /// returns source id of [`crate::builder::SourceMapBuilder`]
+    fn add_source(&mut self, source: Arc<Source>, ctx: &Context) -> u32 {
         match self {
             Emit::WithSourceMapBuilderAndDstLine(builder, _, swis) => {
-                swis.insert(source.clone(), stack.drain(1..).collect());
+                let stack: Vec<_> = ctx.stack.clone().drain(1..).collect();
+                if !stack.is_empty() {
+                    swis.insert(source.clone(), stack);
+                };
+
                 builder.add_source_with_id(source)
             }
             _ => unreachable!(),

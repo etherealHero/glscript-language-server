@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::builder::PatternSources;
 use crate::builder::source_map_builder::SourceMapBuilder;
+use crate::parser::LineCol;
 use crate::state::State;
 use crate::types::{Source, SourceHash, SourcePattern};
 
@@ -26,18 +27,19 @@ pub struct Context<'a> {
     pat_sources: Option<PatternSources>,
     resolve_deps: bool,
     is_default_context: bool,
-    source_include_stack: Vec<Source>,
+    stack: Stack,
 }
 
 pub enum Emit {
-    WithSourceMapBuilderAndDstLine(SourceMapBuilder, u32, SourcesWithIncludeStack),
+    WithSourceMapBuilderAndDstLine(SourceMapBuilder, u32, HashMap<Arc<Source>, Stack>),
     WithDstContent(String, Option<PatternSources>),
 }
 
-pub type SourcesWithIncludeStack = HashMap<Arc<Source>, Vec<Source>>;
+/// Stack sequence of [`Source`]'s with [`Token::IncludePath`] position and literal length
+pub type Stack = Vec<(Source, LineCol, usize)>;
 
 pub enum EmitResult {
-    TokensCountAndSourceMap(usize, sourcemap::SourceMap, SourcesWithIncludeStack),
+    TokensCountAndSourceMap(usize, sourcemap::SourceMap, HashMap<Arc<Source>, Stack>),
     Content(String, Option<PatternSources>),
 }
 
