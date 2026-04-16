@@ -1,5 +1,5 @@
 use async_lsp::lsp_types::request as R;
-use async_lsp::{LanguageServer, ResponseError, lsp_types as lsp};
+use async_lsp::{LanguageServer, ResponseError, ServerSocket, lsp_types as lsp};
 
 use crate::builder::EMIT_FILE_EXT;
 use crate::proxy::language_server::DefRes;
@@ -12,10 +12,29 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
-pub fn proxy_definition(
+pub fn proxy_def(x: &mut Proxy, p: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
+    proxy_goto(x, p, |service, params| service.definition(params))
+}
+
+pub fn proxy_impl(x: &mut Proxy, p: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
+    proxy_goto(x, p, |service, params| service.implementation(params))
+}
+
+pub fn proxy_type_def(x: &mut Proxy, p: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
+    proxy_goto(x, p, |service, params| service.type_definition(params))
+}
+
+fn proxy_goto<F, Fut>(
     this: &mut Proxy,
     mut params: lsp::GotoDefinitionParams,
-) -> ResFut<R::GotoDefinition> {
+    call: F,
+) -> ResFut<R::GotoDefinition>
+where
+    F: FnOnce(&mut ServerSocket, lsp::GotoDefinitionParams) -> Fut + Send + 'static,
+    Fut: futures::Future<Output = Result<Option<lsp::GotoDefinitionResponse>, async_lsp::Error>>
+        + Send
+        + 'static,
+{
     let mut service = this.server();
     let uri = &params.text_document_position_params.text_document.uri;
     let req_bundle = try_ensure_bundle!(this, uri, params, definition);
@@ -26,7 +45,7 @@ pub fn proxy_definition(
         let doc_pos = &mut params.text_document_position_params;
         try_forward_text_document_position_params!(state, req_bundle, doc_pos);
 
-        let res = service.definition(params).await.map_err(Error::internal);
+        let res = call(&mut service, params).await.map_err(Error::internal);
         if res.is_err() || res.as_ref().expect("is some").is_none() {
             return res;
         }

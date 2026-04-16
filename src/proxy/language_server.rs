@@ -80,7 +80,9 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::SignatureHelpRequest, _>(common_features::proxy_signature_help)
         .notification::<N::Cancel>(common_features::proxy_cancel_request)
         .request::<R::HoverRequest, _>(hover::proxy_hover_with_decl_info)
-        .request::<R::GotoDefinition, _>(definition::proxy_definition)
+        .request::<R::GotoDefinition, _>(definition::proxy_def)
+        .request::<R::GotoImplementation, _>(definition::proxy_impl)
+        .request::<R::GotoTypeDefinition, _>(definition::proxy_type_def)
         .request::<R::Completion, _>(completion::proxy_completion)
         .request::<R::ResolveCompletionItem, _>(completion::proxy_completion_item_resolve)
         .request::<R::References, _>(Proxy::references)
@@ -117,7 +119,7 @@ impl LanguageServer for Proxy {
     /// - [`hover::proxy_hover_with_decl_info`]
     /// - [`references::proxy_workspace_references`]
     fn definition(&mut self, params: lsp::GotoDefinitionParams) -> ResFut<R::GotoDefinition> {
-        let req = definition::proxy_definition(self, params);
+        let req = definition::proxy_def(self, params);
         Box::pin(async move { req.await })
     }
 

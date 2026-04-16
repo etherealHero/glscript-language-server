@@ -1,4 +1,4 @@
-use derive_more::Constructor;
+use derive_more::{Constructor, Display};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
@@ -82,6 +82,7 @@ impl Proxy {
     }
 }
 
+#[derive(Display)]
 pub struct Error {}
 
 impl Error {
