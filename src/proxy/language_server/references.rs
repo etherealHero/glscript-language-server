@@ -58,7 +58,7 @@ pub fn proxy_workspace_references(
         let mut ws_locs = HashSet::new();
         let mut is_sync_doc_failed = false;
         let def_source = st.get_doc(&def_loc.target_uri).unwrap().source;
-        let opened_bundles_contains_source = st.get_bundles_contains_source(&def_source); // TODO: if global context ?
+        let opened_bundles_contains_source = st.get_bundles_contains_source(&def_source);
         let unopened_docs = get_unopened_documents(&st, &root, &def_loc);
 
         for (i, doc_uri) in unopened_docs.iter().enumerate() {
@@ -164,7 +164,7 @@ fn get_unopened_documents(
     use rayon::prelude::*;
 
     let def_source = state.get_doc(&def_loc.target_uri).unwrap().source;
-    let opened_bundles_contains_source = state.get_bundles_contains_source(&def_source); // TODO: if global context ?
+    let opened_bundles_contains_source = state.get_bundles_contains_source(&def_source);
     let default_sources: Vec<_> = state.get_default_sources();
     let (js, decl) = (&JS_FILE_EXT[1..], &DECL_FILE_EXT[1..]);
     let (def_lit, source_hash) = get_definition_pattern(def_loc, state);
@@ -203,7 +203,7 @@ fn get_unopened_documents(
         })
         .collect();
 
-    let all_bundles_contains_source = state.get_bundles_contains_source(&def_source); // TODO: if global context ?
+    let all_bundles_contains_source = state.get_bundles_contains_source(&def_source);
 
     matched_docs.par_iter().for_each(|d| {
         if !all_bundles_contains_source.contains(&state.uri_to_path(d).unwrap()) {

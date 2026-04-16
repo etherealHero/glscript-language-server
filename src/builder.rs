@@ -143,8 +143,9 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
         }
     };
 
-    let ((tokens_count, source_map, sources_stack), (content, pattern_sources)) =
-        rayon::join(sourcemap_task, content_task); // TODO: rebuild only sourcemap on dep_hash eq prev
+    let (sourcemap_task, content_task) = rayon::join(sourcemap_task, content_task);
+    let (tokens_count, source_map, sources_stack) = sourcemap_task;
+    let (content, pattern_sources) = content_task;
 
     #[cfg(debug_assertions)]
     emit::emit_on_disk(opt, &doc, &source_map, &content)?;
