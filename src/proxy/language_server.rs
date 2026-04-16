@@ -96,7 +96,8 @@ pub fn init_language_server_router(proxy: Proxy) -> Router<Proxy> {
         .request::<R::RangeFormatting, _>(formatting::proxy_range_formatting)
         .request::<R::InlayHintRequest, _>(inlay_hint::proxy_inlay_hint)
         .request::<R::CodeActionRequest, _>(code_action::proxy_code_action)
-        .request::<R::ExecuteCommand, _>(code_action::proxy_execute_command);
+        .request::<R::ExecuteCommand, _>(code_action::proxy_execute_command)
+        .request::<R::DocumentHighlightRequest, _>(common_features::proxy_document_highlight);
     router
 }
 

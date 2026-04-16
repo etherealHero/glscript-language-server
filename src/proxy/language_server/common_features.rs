@@ -115,3 +115,34 @@ pub fn proxy_folding_range(
         res
     })
 }
+
+pub fn proxy_document_highlight(
+    this: &mut Proxy,
+    mut params: lsp::DocumentHighlightParams,
+) -> ResFut<R::DocumentHighlightRequest> {
+    let mut s = this.server();
+    let uri = &params.text_document_position_params.text_document.uri;
+    let bundle = try_ensure_bundle!(this, uri, params, document_highlight);
+    let state = this.state.clone();
+    let doc = this.state.get_doc(uri).unwrap();
+    Box::pin(async move {
+        let tdpp = &mut params.text_document_position_params;
+        if doc.is_inside_include_path(&tdpp.position) {
+            return Ok(None);
+        };
+        try_forward_text_document_position_params!(state, bundle, tdpp);
+        match s.document_highlight(params).await.map_err(Error::internal) {
+            Ok(Some(highlights)) => Ok(Some(
+                highlights
+                    .into_iter()
+                    .filter_map(|mut hl| {
+                        let hl_source = forward_build_range(&mut hl.range, &bundle).ok()?;
+                        doc.source.eq(&hl_source.into()).then_some(hl)
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            Ok(None) => Ok(None),
+            Err(err) => Err(err),
+        }
+    })
+}
