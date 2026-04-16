@@ -27,14 +27,21 @@ pub fn proxy_workspace_references(
 
     let uri = &p.text_document_position.text_document.uri;
     let pos = &p.text_document_position.position;
-    let req_bundle = try_ensure_bundle!(this, uri, p, references);
-    let definition_request = this.definition(definition_params(uri.clone(), pos.to_owned()));
 
     let mut s = this.server();
     let mut client = this.client();
     let st = this.state.clone();
     let root = st.get_project().clone();
     let temp_uri = Uri::from_str("file:///.virtual/refs.js").unwrap();
+
+    if let Ok(doc) = st.get_doc(uri)
+        && doc.is_inside_include_path(pos)
+    {
+        return find_module_references(this, &p);
+    };
+
+    let req_bundle = try_ensure_bundle!(this, uri, p, references);
+    let definition_request = this.definition(definition_params(uri.clone(), pos.to_owned()));
 
     Box::pin(async move {
         let def_loc = get_definition_location(definition_request).await?;
@@ -173,11 +180,13 @@ fn get_unopened_documents(
         .par_iter()
         .filter_map(|p| {
             let pat = SourcePattern::new(&def_lit, source_hash);
-            let uri = state.path_to_uri(p.as_path()).ok();
-            if uri.is_none() || !p.extension().is_some_and(|ext| ext == js || ext == decl) {
+            let uri = state.path_to_uri(p.as_path()).ok()?;
+
+            if p.extension().is_none_or(|ext| ext != js && ext != decl) {
                 return None;
             }
-            let matched = match uri.as_ref().and_then(|u| state.get_doc(u).ok()) {
+
+            let matched = match state.get_doc(&uri).ok() {
                 Some(doc) => doc.parse_content.contains(&def_lit),
                 None => file_contains_text(p, &def_lit).ok()?,
             };
@@ -188,11 +197,9 @@ fn get_unopened_documents(
                 return None;
             }
 
-            state
-                .set_bundle_with_tree_shaking(uri.as_ref().unwrap(), pat)
-                .ok()?;
+            state.set_bundle_with_tree_shaking(&uri, pat).ok()?;
 
-            uri
+            Some(uri)
         })
         .collect();
 
@@ -211,6 +218,7 @@ fn get_unopened_documents(
         .collect()
 }
 
+/// returns definition literal and [`SourceHash`] of definition document
 fn get_definition_pattern(def_loc: &lsp::LocationLink, state: &Arc<State>) -> (String, SourceHash) {
     let def_doc = state.get_doc(&def_loc.target_uri).unwrap();
     let s = def_loc.target_selection_range.start;
@@ -274,4 +282,68 @@ fn file_contains_text<P: AsRef<Path>>(filename: P, search_term: &str) -> anyhow:
     Ok(mmap
         .windows(search_term.len())
         .any(|window| window == search_term.as_bytes()))
+}
+
+fn find_module_references(this: &Proxy, p: &lsp::ReferenceParams) -> ResFut<R::References> {
+    use ignore::Walk;
+    use rayon::prelude::*;
+
+    let uri = &p.text_document_position.text_document.uri;
+    let pos = &p.text_document_position.position;
+
+    let st = this.state.clone();
+    let root = st.get_project().clone();
+
+    let Some(req_source) = st.get_transpile(uri).and_then(|t| {
+        t.sources_stack
+            .iter()
+            .find(|(_, links)| links.iter().any(|l| pos.line == l.1.line))
+            .map(|r| r.0.clone())
+    }) else {
+        return Box::pin(async move { Ok(None) });
+    };
+
+    let mut raw_entries = vec![];
+    for entry in Walk::new(root).flatten() {
+        if entry.file_type().is_some_and(|ft| ft.is_file()) {
+            raw_entries.push(entry.path().to_owned());
+        }
+    }
+
+    let module_refs: Vec<_> = raw_entries
+        .par_iter()
+        .filter_map(|p| {
+            let uri = st.path_to_uri(p.as_path()).ok()?;
+            p.extension()?.eq(&JS_FILE_EXT[1..]).then_some(0)?;
+
+            let find_module_refs = |t: Arc<Build>| {
+                t.sources_stack.iter().find_map(|deps| {
+                    deps.0.eq(&req_source).then(|| {
+                        deps.1
+                            .iter()
+                            .map(|(_, lc, len)| {
+                                let start = lsp::Position::new(lc.line, lc.col);
+                                let end = lsp::Position::new(lc.line, lc.col + *len as u32 + 2);
+                                let range = lsp::Range::new(start, end);
+                                lsp::Location::new(uri.clone(), range)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+            };
+
+            if let Some(t) = st.get_transpile(&uri) {
+                find_module_refs(t)
+            } else {
+                let t = st.set_transpile(&uri).ok()?;
+                let refs = find_module_refs(t.build);
+                st.remove_transpile(&uri);
+                refs
+            }
+        })
+        .collect();
+
+    let module_refs = module_refs.into_iter().flatten().collect::<Vec<_>>();
+
+    Box::pin(async move { Ok(Some(module_refs)) })
 }
