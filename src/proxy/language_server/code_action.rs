@@ -39,7 +39,7 @@ pub fn proxy_code_action(
     if let Some(source_start) = first_non_include_build_pos
         && source_start > bundle_range.end
     {
-        return match get_transpile_action(&doc, &transpile, &st) {
+        return match get_transpile_to_es_syntax_action(&doc, &transpile, &st) {
             Some(transpile_action) => Box::pin(async move { Ok(Some(vec![transpile_action])) }),
             None => Box::pin(async move { Ok(None) }),
         };
@@ -75,7 +75,9 @@ pub fn proxy_code_action(
                     })
                     .collect();
 
-                if let Some(transpile_action) = get_transpile_action(&doc, &transpile, &st) {
+                if let Some(transpile_action) =
+                    get_transpile_to_es_syntax_action(&doc, &transpile, &st)
+                {
                     actions.push(transpile_action);
                 };
 
@@ -99,7 +101,7 @@ pub fn proxy_execute_command(
     Box::pin(async move { s.execute_command(params).await.map_err(Error::internal) })
 }
 
-fn get_transpile_action(
+fn get_transpile_to_es_syntax_action(
     doc: &Document,
     transpile: &Build,
     st: &State,
