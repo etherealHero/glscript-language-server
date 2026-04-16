@@ -1,7 +1,6 @@
 use async_lsp::lsp_types::Url as Uri;
 use derive_more::Constructor;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use crate::builder::PatternSources;
 use crate::builder::source_map_builder::SourceMapBuilder;
@@ -31,15 +30,16 @@ pub struct Context<'a> {
 }
 
 pub enum Emit {
-    WithSourceMapBuilderAndDstLine(SourceMapBuilder, u32, HashMap<Arc<Source>, Stack>),
+    WithSourceMapBuilderAndDstLine(SourceMapBuilder, u32, HashMap<Source, Stack>),
     WithDstContent(String, Option<PatternSources>),
 }
 
-/// Stack sequence of [`Source`]'s with [`Token::IncludePath`] position and literal length
+/// Stack sequence of [`Source`]'s with [`crate::parser::Token::IncludePath`] position and
+/// literal length where source were been included by prev source
 pub type Stack = Vec<(Source, LineCol, usize)>;
 
 pub enum EmitResult {
-    TokensCountAndSourceMap(usize, sourcemap::SourceMap, HashMap<Arc<Source>, Stack>),
+    TokensCountAndSourceMap(usize, sourcemap::SourceMap, HashMap<Source, Stack>),
     Content(String, Option<PatternSources>),
 }
 
@@ -49,8 +49,12 @@ impl Emit {
             Emit::WithDstContent(dst_content, pattern_sources) => {
                 EmitResult::Content(dst_content, pattern_sources)
             }
-            Emit::WithSourceMapBuilderAndDstLine(b, _, swis) => {
-                EmitResult::TokensCountAndSourceMap(b.tokens.len(), b.into_sourcemap(state), swis)
+            Emit::WithSourceMapBuilderAndDstLine(builder, _, sources_stack) => {
+                EmitResult::TokensCountAndSourceMap(
+                    builder.tokens.len(),
+                    builder.into_sourcemap(state),
+                    sources_stack,
+                )
             }
         }
     }

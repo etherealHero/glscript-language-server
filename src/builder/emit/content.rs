@@ -1,5 +1,4 @@
 use async_lsp::lsp_types::Url as Uri;
-use std::collections::HashSet;
 
 use crate::builder::emit::{Context, Emit};
 use crate::parser::Token;
@@ -18,23 +17,21 @@ impl Emit {
             ctx.is_default_context = true;
         }
 
-        let d = match ctx.proxy_state.get_doc(target) {
-            Ok(doc) => doc,
-            Err(_) => return None,
+        let Ok(d) = ctx.proxy_state.get_doc(target) else {
+            return None;
         };
+
         let mut matched = ctx.pat.as_ref().map(|p| PatternMatched {
             source: p.source == d.source_hash,
             literal: p.source == d.source_hash,
         });
-        let (path, tokens, decl_stmt) = (&d.path, d.parse.compressed_tokens.iter(), &d.decl_stmt);
 
         match ctx.visited_sources.contains(&d.source_hash) {
-            true => return None,
             false => ctx.visited_sources.insert(d.source_hash),
+            true => return None,
         };
 
-        let c = |h: &HashSet<_>| h.contains(&d.source_hash);
-        if ctx.pat_sources.as_ref().map(c) == Some(false) {
+        if ctx.pat_sources.as_ref().map(|h| h.contains(&d.source_hash)) == Some(false) {
             st.push_str(&format!("\n/** skip resolve {} */\n", d.source));
             return None;
         }
@@ -43,16 +40,16 @@ impl Emit {
             if let Some(dep_match) = Emit::content(st, ctx, ctx.defult_document) {
                 let current_matched = matched.as_ref().unwrap();
                 matched = Some(PatternMatched {
-                    literal: current_matched.literal || dep_match.literal,
-                    source: current_matched.source || dep_match.source,
+                    literal: current_matched.literal.max(dep_match.literal),
+                    source: current_matched.source.max(dep_match.source),
                 });
             }
 
-            st.push_str(decl_stmt);
+            st.push_str(&d.decl_stmt);
         }
 
         let mut lt_ro_skip = false;
-        for t in tokens {
+        for t in d.parse.compressed_tokens.iter() {
             match t {
                 Token::Include(t) => match ctx.resolve_deps {
                     true => (0..t.len).for_each(|_| st.push(' ')),
@@ -66,24 +63,22 @@ impl Emit {
                         continue;
                     }
 
-                    let dep_path = ctx.proxy_state.path_resolver(path, t.lit);
-                    if let Ok(dep_uri) = ctx.proxy_state.path_to_uri(&dep_path) {
-                        if let Ok(dep_doc) = ctx.proxy_state.get_doc(&dep_uri) {
-                            st.push_str(&dep_doc.link_stmt);
+                    let dep_path = ctx.proxy_state.path_resolver(&d.path, t.lit);
+                    let dep_uri = || ctx.proxy_state.path_to_uri(&dep_path);
+                    let dep_doc = dep_uri().and_then(|uri| ctx.proxy_state.get_doc(&uri));
+                    let link = dep_doc.as_ref().map(|d| d.link_stmt.as_str());
 
-                            if let Some(dep_match) = Emit::content(st, ctx, &dep_uri) {
-                                let current_matched = matched.as_ref().unwrap();
-                                matched = Some(PatternMatched {
-                                    literal: current_matched.literal || dep_match.literal,
-                                    source: current_matched.source || dep_match.source,
-                                });
-                            }
-                        } else {
-                            st.push_str(&DocumentLinkStatement::undefined())
-                        };
-                    } else {
-                        st.push_str(&DocumentLinkStatement::undefined());
-                    };
+                    st.push_str(link.unwrap_or(&DocumentLinkStatement::undefined()));
+
+                    if dep_doc.is_ok()
+                        && let Some(dep_match) = Emit::content(st, ctx, &dep_uri().unwrap())
+                    {
+                        let current_matched = matched.as_ref().unwrap();
+                        matched = Some(PatternMatched {
+                            literal: current_matched.literal.max(dep_match.literal),
+                            source: current_matched.source.max(dep_match.source),
+                        });
+                    }
 
                     st.push('\n'); // traling statements after include path on current line
                     (0..(t.line_col.col + t.lit.len() as u32 + 2)).for_each(|_| st.push(' '));

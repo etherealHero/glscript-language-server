@@ -1,5 +1,5 @@
 use async_lsp::lsp_types::Url as Uri;
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use crate::builder::emit::{Context, Emit};
 use crate::parser::{LineCol, Token};
@@ -8,31 +8,37 @@ use crate::types::{DocumentLinkStatement, Source};
 /// SourceMap
 impl Emit {
     pub fn sourcemap(st: &mut Emit, ctx: &mut Context, target: &Uri) {
-        let d = match ctx.proxy_state.get_doc(target) {
-            Ok(doc) => doc,
-            Err(_) => return,
+        let Ok(d) = ctx.proxy_state.get_doc(target) else {
+            return;
         };
-        let (source, path, tokens) = (&d.source, &d.path, d.parse.compressed_tokens.iter());
-        let source = (*source.clone()).clone();
 
-        if ctx.visited_sources.contains(&d.source_hash) {
-            return;
-        }
+        match ctx.visited_sources.contains(&d.source_hash) {
+            false => ctx.visited_sources.insert(d.source_hash),
+            true => return,
+        };
 
-        ctx.visited_sources.insert(d.source_hash);
-        ctx.stack.push((source, (0, 0).into(), 0));
+        st.add_source_stack((*d.source).clone(), ctx);
 
-        let src_id = st.add_source(d.source.clone(), ctx);
-
-        let c = |h: &HashSet<_>| h.contains(&d.source_hash);
-        if ctx.pat_sources.as_ref().map(c) == Some(false) {
+        if ctx.pat_sources.as_ref().map(|h| h.contains(&d.source_hash)) == Some(false) {
             st.line_break();
             st.line_break();
             return;
         }
+
+        let src_id = st.add_source(d.source.clone());
 
         if ctx.resolve_deps {
-            Emit::sourcemap(st, ctx, ctx.defult_document);
+            let source = ctx
+                .proxy_state
+                .get_doc(ctx.defult_document)
+                .map(|d| (*d.source).clone());
+
+            if let Ok(source) = source {
+                let stack = (source, (0, 0).into(), 0);
+                ctx.stack.push(stack);
+                Emit::sourcemap(st, ctx, ctx.defult_document);
+                ctx.stack.pop();
+            }
 
             // DocumentDeclarationStatement
             st.line_break();
@@ -52,48 +58,47 @@ impl Emit {
                 st.add_token(dst_col, pos.line, pos.col, src_id);
             };
 
-        for t in tokens {
+        for t in d.parse.compressed_tokens.iter() {
             match t {
                 Token::Include(t) => add_map(t.line_col.col, &t.line_col, st, lt_ro, lt_ro_offset),
                 Token::IncludePath(t) => {
-                    let dep_path = ctx.proxy_state.path_resolver(path, t.lit);
-                    let dep_uri = ctx.proxy_state.path_to_uri(&dep_path);
-                    let (left_offset, right_offset, doc_uri) = if let Ok(uri) = dep_uri {
-                        if let Ok(d) = ctx.proxy_state.get_doc(&uri) {
-                            (d.link_stmt.left_offset, d.link_stmt.right_offset, Some(uri))
-                        } else {
-                            let stmt = DocumentLinkStatement::undefined();
-                            (stmt.left_offset, stmt.right_offset, None)
+                    let dep_path = ctx.proxy_state.path_resolver(&d.path, t.lit);
+                    let dep_uri = || ctx.proxy_state.path_to_uri(&dep_path);
+                    let dep_doc = dep_uri().and_then(|uri| ctx.proxy_state.get_doc(&uri));
+
+                    if let Ok(doc) = dep_doc.as_ref() {
+                        let source = doc.source.clone();
+                        let source = (*source).clone();
+                        let stack = (source.clone(), t.line_col.clone(), t.lit.len());
+                        ctx.stack.push(stack);
+
+                        // 1* - emit stack for transpile builds like bundle
+                        if !ctx.resolve_deps {
+                            st.add_source_stack(source, ctx);
+                            ctx.stack.pop();
                         }
-                    } else {
-                        let stmt = DocumentLinkStatement::undefined();
-                        (stmt.left_offset, stmt.right_offset, None)
-                    };
+                    }
 
                     if !ctx.resolve_deps {
                         let real_col = t.line_col.col - 1;
                         let pos = &((t.line_col.line, real_col).into());
                         add_map(real_col, pos, st, lt_ro, lt_ro_offset);
 
-                        if let Some(dep_uri) = doc_uri {
-                            let dep_source = ctx.proxy_state.get_doc(&dep_uri).unwrap().source;
-                            let arc_dep_source = dep_source.clone();
-                            let dep_source = (*arc_dep_source.clone()).clone();
-                            ctx.stack
-                                .push((dep_source, t.line_col.clone(), t.lit.len()));
-                            st.add_source(arc_dep_source, ctx);
-                        }
-
                         continue;
                     }
 
+                    let link = dep_doc.as_ref().map(|d| d.link_stmt.clone());
+                    let link = link.unwrap_or(DocumentLinkStatement::undefined().into());
+
                     st.line_break();
-                    st.add_token(left_offset, t.line_col.line, t.line_col.col, src_id);
-                    st.add_token(right_offset, 0, 0, !0);
+                    st.add_token(link.left_offset, t.line_col.line, t.line_col.col, src_id);
+                    st.add_token(link.right_offset, 0, 0, !0);
                     st.line_break();
 
-                    if let Some(target) = doc_uri {
-                        Emit::sourcemap(st, ctx, &target);
+                    // 1*
+                    if dep_doc.is_ok() {
+                        Emit::sourcemap(st, ctx, &dep_uri().unwrap());
+                        ctx.stack.pop();
                     }
 
                     st.line_break(); // traling statements after include path on current line
@@ -122,8 +127,6 @@ impl Emit {
                 Token::Eoi(t) => add_map(t.col, t, st, lt_ro, lt_ro_offset),
             }
         }
-
-        ctx.stack.pop();
     }
 
     pub fn line_break(&mut self) {
@@ -136,15 +139,32 @@ impl Emit {
 
 impl Emit {
     /// returns source id of [`crate::builder::SourceMapBuilder`]
-    fn add_source(&mut self, source: Arc<Source>, ctx: &Context) -> u32 {
+    fn add_source(&mut self, source: Arc<Source>) -> u32 {
         match self {
-            Emit::WithSourceMapBuilderAndDstLine(builder, _, swis) => {
-                let stack: Vec<_> = ctx.stack.clone().drain(1..).collect();
-                if !stack.is_empty() {
-                    swis.insert(source.clone(), stack);
-                };
-
+            Emit::WithSourceMapBuilderAndDstLine(builder, _, _) => {
                 builder.add_source_with_id(source)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn add_source_stack(&mut self, source: Source, ctx: &Context) {
+        match self {
+            Emit::WithSourceMapBuilderAndDstLine(_, _, sources_stack) => {
+                if !ctx.stack.is_empty() {
+                    let mut ctx_stack = ctx.stack.clone();
+
+                    sources_stack
+                        .entry(source)
+                        .and_modify(|source_links| {
+                            assert!(
+                                !ctx.resolve_deps,
+                                "extensible stack for transpile builds only"
+                            );
+                            source_links.append(&mut ctx_stack);
+                        })
+                        .or_insert(ctx_stack);
+                };
             }
             _ => unreachable!(),
         }

@@ -1,7 +1,6 @@
 use async_lsp::lsp_types::Url as Uri;
 use derive_more::Constructor;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use crate::types::{Source, SourceHash};
 use crate::{builder::emit::Stack, state::State};
@@ -27,7 +26,7 @@ pub struct Build {
     pub uri: Uri,
 
     /// Shows how any [`Source`] resolved by [`Stack`]
-    pub sources_stack: HashMap<Arc<Source>, Stack>,
+    pub sources_stack: HashMap<Source, Stack>,
 
     source_map: sourcemap::SourceMap,
     tokens_count: usize,
@@ -128,7 +127,9 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
             Emit::WithSourceMapBuilderAndDstLine(builder, dst_line, swis);
         Emit::sourcemap(&mut emit_sourcemap_state, &mut new_ctx(), opt.uri);
         match emit_sourcemap_state.finish(opt.st) {
-            EmitResult::TokensCountAndSourceMap(count, sm, swis) => (count, sm, swis),
+            EmitResult::TokensCountAndSourceMap(count, sm, sources_stack) => {
+                (count, sm, sources_stack)
+            }
             _ => unreachable!(),
         }
     };
@@ -142,7 +143,7 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
         }
     };
 
-    let ((tokens_count, source_map, swis), (content, pattern_sources)) =
+    let ((tokens_count, source_map, sources_stack), (content, pattern_sources)) =
         rayon::join(sourcemap_task, content_task); // TODO: rebuild only sourcemap on dep_hash eq prev
 
     #[cfg(debug_assertions)]
@@ -153,7 +154,7 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
         false => doc.transpile_uri.as_ref().clone(),
     };
 
-    let build = Build::new(content, emit_uri, swis, source_map, tokens_count);
+    let build = Build::new(content, emit_uri, sources_stack, source_map, tokens_count);
 
     Ok((build, pattern_sources))
 }
