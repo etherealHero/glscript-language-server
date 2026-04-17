@@ -122,8 +122,11 @@ fn get_transpile_to_es_syntax_action(
         lsp::Position::new(eof.line, eof.col),
     );
 
+    let doc_uri = st.path_to_uri(&doc.path).unwrap();
+    let doc_uri = (*doc_uri).clone();
+
     changes.insert(
-        st.path_to_uri(&doc.path).unwrap(),
+        doc_uri,
         vec![lsp::TextEdit::new(
             whole_file,
             transpile.content.as_str().into(),

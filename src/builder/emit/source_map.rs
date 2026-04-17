@@ -13,14 +13,16 @@ impl Emit {
     }
 
     fn _sourcemap(st: &mut Emit, ctx: &mut Context, target: &Uri) {
-        let Ok(d) = ctx.proxy_state.get_doc(target) else {
+        let Ok(source_hash) = ctx.proxy_state.get_doc_source_hash(target) else {
             return;
         };
 
-        match ctx.visited_sources.contains(&d.source_hash) {
-            false => ctx.visited_sources.insert(d.source_hash),
+        match ctx.visited_sources.contains(&source_hash) {
+            false => ctx.visited_sources.insert(source_hash),
             true => return,
         };
+
+        let d = ctx.proxy_state.get_doc(target).unwrap();
 
         st.add_source_stack((*d.source).clone(), ctx);
 
@@ -107,6 +109,9 @@ impl Emit {
                     // 1*
                     if dep_exists_and_not_visited {
                         Emit::_sourcemap(st, ctx, &dep_uri().unwrap());
+                    }
+
+                    if dep_doc.is_ok() {
                         ctx.stack.pop();
                     }
 

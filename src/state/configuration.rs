@@ -33,7 +33,7 @@ impl State {
     pub fn get_default_doc(&self) -> Uri {
         let path = self.project.get().unwrap();
         let path = path.join(PROXY_WORKSPACE).join(DEFAULT_SCRIPT_FILENAME);
-        let default_doc = self.path_to_uri(&path);
+        let default_doc = self.path_to_uri(&path).map(|uri| (*uri).clone());
 
         default_doc.unwrap_or(Uri::from_file_path(path).unwrap().canonicalize().unwrap())
     }

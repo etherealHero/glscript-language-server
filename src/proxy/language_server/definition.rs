@@ -106,7 +106,10 @@ fn forward(
             forward_build_range(&mut link.target_selection_range, any_build)?;
 
             let path = &project.join(source.as_str());
-            link.target_uri = state.path_to_uri(path).unwrap();
+            let target_uri = state.path_to_uri(path).unwrap();
+            let target_uri = (*target_uri).clone();
+
+            link.target_uri = target_uri;
             link.origin_selection_range = None;
             forward_links.insert(HashLocationLink(link));
             continue;
@@ -125,7 +128,9 @@ fn forward(
         .into_iter()
         .map(|mut h| {
             if let Ok(path) = state.uri_to_path(&h.0.target_uri) {
-                h.0.target_uri = state.path_to_uri(&path).unwrap();
+                let target_uri = state.path_to_uri(&path).unwrap();
+                let target_uri = (*target_uri).clone();
+                h.0.target_uri = target_uri;
             }
             h.0
         })

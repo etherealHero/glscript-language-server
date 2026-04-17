@@ -41,5 +41,5 @@ pub struct State {
 
     path_resolver_cache: DashMap<(PathBuf, String), Arc<PathBuf>>,
     uri_to_canonicalized_path: DashMap<Uri, PathBuf>,
-    path_to_canonicalized_uri: DashMap<PathBuf, Uri>,
+    path_to_canonicalized_uri: DashMap<PathBuf, Arc<Uri>>,
 }

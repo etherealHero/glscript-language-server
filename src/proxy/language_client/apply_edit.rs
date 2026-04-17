@@ -51,6 +51,7 @@ pub fn proxy_apply_edit(
             let Ok(source_uri) = st.path_to_uri(&project.join(source.as_str())) else {
                 continue;
             };
+            let source_uri = (*source_uri).clone();
             let edit = || lsp::TextEdit::new(source_range, e.new_text.to_owned());
             source_changes
                 .entry(source_uri)

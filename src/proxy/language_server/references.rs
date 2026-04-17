@@ -182,6 +182,7 @@ fn get_unopened_documents(
         .filter_map(|p| {
             let pat = SourcePattern::new(&def_lit, source_hash);
             let uri = state.path_to_uri(p.as_path()).ok()?;
+            let uri = (*uri).clone();
 
             if p.extension().is_none_or(|ext| ext != js && ext != decl) {
                 return None;
@@ -215,7 +216,7 @@ fn get_unopened_documents(
     all_bundles_contains_source
         .into_par_iter()
         .filter(|p| !opened_bundles_contains_source.contains(p))
-        .map(|p| state.path_to_uri(&p).unwrap())
+        .map(|p| (*state.path_to_uri(&p).unwrap()).clone())
         .collect()
 }
 
@@ -266,7 +267,9 @@ async fn fetch_with_build_params(
                 if req_uri == l.uri.try_canonicalize()
                     && let Ok(source) = forward_build_range(&mut l.range, &build)
                 {
-                    l.uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                    let uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                    let uri = (*uri).clone();
+                    l.uri = uri;
                 }
             });
             Some(r)
@@ -315,6 +318,7 @@ fn find_module_references(this: &Proxy, p: &lsp::ReferenceParams) -> ResFut<R::R
         .par_iter()
         .filter_map(|p| {
             let uri = st.path_to_uri(p.as_path()).ok()?;
+            let uri = (*uri).clone();
             p.extension()?.eq(&JS_FILE_EXT[1..]).then_some(0)?;
 
             let find_module_refs = |t: Arc<Build>| {

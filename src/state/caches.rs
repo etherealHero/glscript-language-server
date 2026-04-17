@@ -26,7 +26,7 @@ impl State {
 
     /// returns canonicalized [`Uri`]
     #[inline]
-    pub fn path_to_uri(&self, path: &Path) -> anyhow::Result<Uri> {
+    pub fn path_to_uri(&self, path: &Path) -> anyhow::Result<Arc<Uri>> {
         if let Some(canonicalized_uri) = self.path_to_canonicalized_uri.get(path) {
             return Ok(canonicalized_uri.clone());
         }
@@ -34,7 +34,7 @@ impl State {
         let canonicalized_path = &dunce::canonicalize(dunce::simplified(path))?;
         let uri = Uri::from_file_path(canonicalized_path);
         let uri = uri.map_err(|_| anyhow::anyhow!("path to uri fail: {path:?}"))?;
-        let canonicalized_uri = uri.canonicalize()?;
+        let canonicalized_uri: Arc<_> = uri.canonicalize()?.into();
 
         self.path_to_canonicalized_uri
             .insert(path.to_path_buf(), canonicalized_uri.clone());

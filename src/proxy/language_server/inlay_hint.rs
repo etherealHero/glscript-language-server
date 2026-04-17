@@ -74,7 +74,9 @@ fn forward_label(h: &lsp::InlayHint, st: &State) -> Option<lsp::InlayHintLabel> 
             return l.into();
         };
         let source = forward_build_range(&mut l.range, &build).ok()?;
-        l.uri = st.path_to_uri(&project.join(source.as_str())).unwrap();
+        let uri = st.path_to_uri(&project.join(source.as_str())).unwrap();
+        let uri = (*uri).clone();
+        l.uri = uri;
         l.into()
     };
 

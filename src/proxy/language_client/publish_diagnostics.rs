@@ -86,6 +86,7 @@ pub fn proxy_publish_diagnostics(
                         };
 
                         let source_uri = state.path_to_uri(&project.join(ri_source.as_str())).unwrap();
+                        let source_uri = (*source_uri).clone();
 
                         source_related_information.push(lsp::DiagnosticRelatedInformation {
                             location: lsp::Location::new(source_uri, source_ri_range),
@@ -140,6 +141,7 @@ pub fn proxy_publish_diagnostics(
             .map(|entry| {
                 let source_path = project.join(entry.source.as_str());
                 let source_uri = state.path_to_uri(&source_path).unwrap();
+                let source_uri = (*source_uri).clone();
                 lsp::Location::new(source_uri, entry.diagnostic.range)
             })
             .collect::<Vec<_>>();
@@ -190,9 +192,12 @@ pub fn proxy_publish_diagnostics(
         source_diagnostics.extend(doc_diagnostics);
     }
 
+    let doc_uri = state.path_to_uri(&doc.path).unwrap();
+    let doc_uri = (*doc_uri).clone();
+
     client
         .publish_diagnostics(lsp::PublishDiagnosticsParams::new(
-            state.path_to_uri(&doc.path).unwrap(),
+            doc_uri,
             source_diagnostics,
             None,
         ))

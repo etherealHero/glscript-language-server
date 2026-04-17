@@ -107,10 +107,9 @@ pub fn proxy_workspace_symbol(
                         continue;
                     };
 
-                    let location = lsp::Location::new(
-                        state.path_to_uri(&project.join(source.as_str())).unwrap(),
-                        range,
-                    );
+                    let uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                    let uri = (*uri).clone();
+                    let location = lsp::Location::new(uri, range);
 
                     source_symbols.push(lsp::SymbolInformation {
                         container_name: None,

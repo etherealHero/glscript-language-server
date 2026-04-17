@@ -116,6 +116,15 @@ impl State {
         self.get_doc(source_uri)
     }
 
+    pub fn get_doc_source_hash(&self, source_uri: &Uri) -> anyhow::Result<SourceHash> {
+        let path = &self.uri_to_path(source_uri)?;
+
+        match self.documents.get(path) {
+            Some(d) => Ok(d.source_hash),
+            None => self.get_doc(source_uri).map(|d| d.source_hash),
+        }
+    }
+
     pub fn get_doc_by_emit_uri(&self, emit_uri: &Uri) -> Option<Document> {
         let emit_uri_canonicalized = emit_uri.try_canonicalize();
         let get_doc = |s: &BuildStorage| {

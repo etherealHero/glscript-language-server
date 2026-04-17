@@ -22,14 +22,16 @@ impl Emit {
             ctx.is_default_context = true;
         }
 
-        let Ok(d) = ctx.proxy_state.get_doc(target) else {
+        let Ok(source_hash) = ctx.proxy_state.get_doc_source_hash(target) else {
             return None;
         };
 
-        match ctx.visited_sources.contains(&d.source_hash) {
-            false => ctx.visited_sources.insert(d.source_hash),
+        match ctx.visited_sources.contains(&source_hash) {
+            false => ctx.visited_sources.insert(source_hash),
             true => return None,
         };
+
+        let d = ctx.proxy_state.get_doc(target).unwrap();
 
         if ctx.pat_sources.as_ref().map(|h| h.contains(&d.source_hash)) == Some(false) {
             st.push_str(&format!("\n/** skip resolve {} */\n", d.source));
@@ -129,6 +131,7 @@ impl Emit {
 }
 
 impl Emit {
+    #[inline]
     fn push_str(&mut self, str: &str) {
         match self {
             Emit::WithDstContent(dst_content, _) => dst_content.push_str(str),
@@ -136,6 +139,7 @@ impl Emit {
         }
     }
 
+    #[inline]
     fn push_pattern_source(&mut self, source: SourceHash) {
         match self {
             Emit::WithDstContent(_, Some(sources)) => sources.insert(source),
@@ -143,6 +147,7 @@ impl Emit {
         };
     }
 
+    #[inline]
     fn push(&mut self, char: char) {
         match self {
             Emit::WithDstContent(dst_content, _) => dst_content.push(char),
@@ -150,6 +155,7 @@ impl Emit {
         }
     }
 
+    #[inline]
     fn traverse_common(
         &mut self,
         ctx: &mut Context<'_>,
