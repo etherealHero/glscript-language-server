@@ -20,7 +20,7 @@ pub use dev::emit_on_disk;
 #[derive(Constructor)]
 pub struct Context<'a> {
     proxy_state: &'a State,
-    defult_document: &'a Uri,
+    default_document: &'a Uri,
     visited_sources: HashSet<SourceHash>,
     pat: Option<SourcePattern<'a>>,
     pat_sources: Option<PatternSources>,

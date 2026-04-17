@@ -24,6 +24,7 @@ pub fn proxy_type_def(x: &mut Proxy, p: lsp::GotoDefinitionParams) -> ResFut<R::
     proxy_goto(x, p, |service, params| service.type_definition(params))
 }
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 fn proxy_goto<F, Fut>(
     this: &mut Proxy,
     mut params: lsp::GotoDefinitionParams,

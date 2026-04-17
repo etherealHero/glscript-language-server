@@ -8,6 +8,7 @@ use crate::builder::EMIT_FILE_EXT;
 use crate::proxy::{DECL_FILE_EXT, Error, NotifyResult, Proxy, forward_build_range};
 use crate::types::{SCRIPT_IDENTIFIER_PREFIX, Source};
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_publish_diagnostics(
     this: &mut Proxy,
     params: lsp::PublishDiagnosticsParams,

@@ -17,6 +17,7 @@ use crate::state::State;
 use crate::types::{SourceHash, SourcePattern};
 use crate::{try_ensure_bundle, try_forward_text_document_position_params};
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_workspace_references(
     this: &mut Proxy,
     mut p: lsp::ReferenceParams,

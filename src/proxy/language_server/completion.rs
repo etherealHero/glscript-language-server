@@ -11,6 +11,7 @@ use crate::{try_ensure_bundle, try_ensure_transpile, try_forward_text_document_p
 
 type Res = lsp::CompletionResponse;
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_completion(this: &mut Proxy, p: lsp::CompletionParams) -> ResFut<R::Completion> {
     let s = this.server();
     let uri = &p.text_document_position.text_document.uri;

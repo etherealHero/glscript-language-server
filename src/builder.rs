@@ -82,7 +82,6 @@ impl Build {
     }
 }
 
-#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> {
     let doc = opt.st.get_doc(opt.uri)?;
     let (mut initial_buf, sources_cap, tokens_cap) = {

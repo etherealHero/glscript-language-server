@@ -12,6 +12,7 @@ use crate::try_ensure_transpile;
 /// wiki:
 /// - <https://pygls.readthedocs.io/en/latest/protocol/howto/interpret-semantic-tokens.html>
 /// - [`lsp::SemanticTokens`] on prop `data`
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_semantic_tokens_full(
     this: &mut Proxy,
     mut params: lsp::SemanticTokensParams,
@@ -34,6 +35,7 @@ pub fn proxy_semantic_tokens_full(
     })
 }
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_semantic_tokens_range(
     this: &mut Proxy,
     mut params: lsp::SemanticTokensRangeParams,

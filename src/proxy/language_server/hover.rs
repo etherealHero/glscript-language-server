@@ -12,6 +12,7 @@ use crate::state::State;
 use crate::types::{SCRIPT_IDENTIFIER_PREFIX, Source};
 use crate::{try_ensure_bundle, try_forward_text_document_position_params};
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_hover_with_decl_info(
     this: &mut Proxy,
     mut params: lsp::HoverParams,

@@ -8,6 +8,7 @@ use crate::proxy::{Error, Proxy, ResFut, forward_build_range};
 use crate::state::State;
 use crate::try_ensure_bundle;
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_inlay_hint(
     this: &mut Proxy,
     mut params: lsp::InlayHintParams,

@@ -20,12 +20,19 @@ impl Emit {
             true => return,
         };
 
-        Emit::_prepare_par_iter(ctx, ctx.defult_document);
+        Emit::_prepare_par_iter(ctx, ctx.default_document);
 
         for t in d.parse.compressed_tokens.iter() {
             if let Token::IncludePath(t) = t {
                 let dep_path = ctx.proxy_state.path_resolver(&d.path, t.lit);
-                if let Ok(target) = ctx.proxy_state.path_to_uri(&dep_path) {
+                let dep_uri = || ctx.proxy_state.path_to_uri(&dep_path);
+                let dep_exists_and_not_visited = dep_uri()
+                    .and_then(|uri| ctx.proxy_state.get_doc(&uri))
+                    .as_ref()
+                    .map(|d| ctx.visited_sources.contains(&d.source_hash))
+                    .is_ok_and(|visited| !visited);
+
+                if dep_exists_and_not_visited && let Ok(target) = dep_uri() {
                     Emit::_prepare_par_iter(ctx, &target);
                 }
             }

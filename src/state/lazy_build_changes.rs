@@ -53,7 +53,6 @@ impl State {
 }
 
 impl State {
-    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     fn forward(&self) {
         use rayon::prelude::*;
 
@@ -88,7 +87,6 @@ impl State {
         self.unforwarded_doc_changes.clear();
     }
 
-    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     fn forward_changes(
         &self,
         build: &Build,
@@ -120,7 +118,6 @@ impl State {
         build_changes
     }
 
-    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     fn forward_params(
         &self,
         fc: Vec<ChangeEvent>,
@@ -138,7 +135,6 @@ impl State {
         }
     }
 
-    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     fn add_forwarded_changes(
         &self,
         source_uri: &Uri,

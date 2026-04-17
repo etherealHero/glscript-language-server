@@ -35,13 +35,13 @@ impl Emit {
         if ctx.resolve_deps {
             let source = ctx
                 .proxy_state
-                .get_doc(ctx.defult_document)
+                .get_doc(ctx.default_document)
                 .map(|d| (*d.source).clone());
 
             if let Ok(source) = source {
                 let stack = (source, (0, 0).into(), 0);
                 ctx.stack.push(stack);
-                Emit::_sourcemap(st, ctx, ctx.defult_document);
+                Emit::_sourcemap(st, ctx, ctx.default_document);
                 ctx.stack.pop();
             }
 
@@ -70,6 +70,10 @@ impl Emit {
                     let dep_path = ctx.proxy_state.path_resolver(&d.path, t.lit);
                     let dep_uri = || ctx.proxy_state.path_to_uri(&dep_path);
                     let dep_doc = dep_uri().and_then(|uri| ctx.proxy_state.get_doc(&uri));
+                    let dep_exists_and_not_visited = dep_doc
+                        .as_ref()
+                        .map(|d| ctx.visited_sources.contains(&d.source_hash))
+                        .is_ok_and(|visited| !visited);
 
                     if let Ok(doc) = dep_doc.as_ref() {
                         let source = doc.source.clone();
@@ -101,7 +105,7 @@ impl Emit {
                     st.line_break();
 
                     // 1*
-                    if dep_doc.is_ok() {
+                    if dep_exists_and_not_visited {
                         Emit::_sourcemap(st, ctx, &dep_uri().unwrap());
                         ctx.stack.pop();
                     }

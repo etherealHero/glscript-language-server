@@ -9,6 +9,7 @@ use crate::proxy::{Error, Proxy, ResFut, forward_build_range};
 use crate::try_ensure_transpile;
 use crate::types::Document;
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_formatting(
     this: &mut Proxy,
     mut params: lsp::DocumentFormattingParams,

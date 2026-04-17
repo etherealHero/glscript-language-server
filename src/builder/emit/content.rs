@@ -18,18 +18,13 @@ impl Emit {
     }
 
     pub fn _content(st: &mut Emit, ctx: &mut Context, target: &Uri) -> Option<PatternMatched> {
-        if target == ctx.defult_document {
+        if target == ctx.default_document {
             ctx.is_default_context = true;
         }
 
         let Ok(d) = ctx.proxy_state.get_doc(target) else {
             return None;
         };
-
-        let mut matched = ctx.pat.as_ref().map(|p| PatternMatched {
-            source: p.source == d.source_hash,
-            literal: p.source == d.source_hash,
-        });
 
         match ctx.visited_sources.contains(&d.source_hash) {
             false => ctx.visited_sources.insert(d.source_hash),
@@ -41,8 +36,13 @@ impl Emit {
             return None;
         }
 
+        let mut matched = ctx.pat.as_ref().map(|p| PatternMatched {
+            source: p.source == d.source_hash,
+            literal: p.source == d.source_hash,
+        });
+
         if ctx.resolve_deps {
-            if let Some(dep_match) = Emit::_content(st, ctx, ctx.defult_document) {
+            if let Some(dep_match) = Emit::_content(st, ctx, ctx.default_document) {
                 let current_matched = matched.as_ref().unwrap();
                 matched = Some(PatternMatched {
                     literal: current_matched.literal.max(dep_match.literal),
@@ -72,10 +72,14 @@ impl Emit {
                     let dep_uri = || ctx.proxy_state.path_to_uri(&dep_path);
                     let dep_doc = dep_uri().and_then(|uri| ctx.proxy_state.get_doc(&uri));
                     let link = dep_doc.as_ref().map(|d| d.link_stmt.as_str());
+                    let dep_exists_and_not_visited = dep_doc
+                        .as_ref()
+                        .map(|d| ctx.visited_sources.contains(&d.source_hash))
+                        .is_ok_and(|visited| !visited);
 
                     st.push_str(link.unwrap_or(&DocumentLinkStatement::undefined()));
 
-                    if dep_doc.is_ok()
+                    if dep_exists_and_not_visited
                         && let Some(dep_match) = Emit::_content(st, ctx, &dep_uri().unwrap())
                     {
                         let current_matched = matched.as_ref().unwrap();
@@ -116,7 +120,7 @@ impl Emit {
             st.push_pattern_source(d.source_hash);
         }
 
-        if target == ctx.defult_document {
+        if target == ctx.default_document {
             ctx.is_default_context = false;
         }
 

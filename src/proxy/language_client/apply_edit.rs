@@ -5,6 +5,7 @@ use async_lsp::lsp_types::{self as lsp, Url as Uri, request as R};
 
 use crate::proxy::{Error, Proxy, ResFut, forward_build_range};
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_apply_edit(
     this: &mut Proxy,
     mut params: lsp::ApplyWorkspaceEditParams,

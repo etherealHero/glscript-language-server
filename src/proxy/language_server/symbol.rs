@@ -6,6 +6,7 @@ use crate::proxy::{Error, Proxy, ResFut, forward_build_range};
 use crate::types::SCRIPT_IDENTIFIER_PREFIX;
 use crate::{try_ensure_bundle, try_ensure_transpile};
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_document_symbol(
     this: &mut Proxy,
     mut params: lsp::DocumentSymbolParams,
@@ -68,6 +69,7 @@ fn forward_document_symbol(
     Some(source_symbols)
 }
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_workspace_symbol(
     this: &mut Proxy,
     params: lsp::WorkspaceSymbolParams,
