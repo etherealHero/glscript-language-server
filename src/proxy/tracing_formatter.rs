@@ -4,6 +4,7 @@ use tracing_subscriber::{
     registry::LookupSpan,
 };
 
+#[allow(unused)]
 pub struct Formatter;
 
 impl<S, N> FormatEvent<S, N> for Formatter

@@ -48,6 +48,7 @@ pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) 
     std::ops::ControlFlow::Continue(())
 }
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn proxy_did_change(
     this: &mut Proxy,
     params: lsp::DidChangeTextDocumentParams,

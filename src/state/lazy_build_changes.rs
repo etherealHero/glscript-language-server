@@ -29,6 +29,7 @@ impl State {
             .or_insert(vec![(doc_changes, transpile_changed)]);
     }
 
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn commit_changes(&self, source_uri: &Uri, s: &mut ServerSocket) {
         let Ok(path) = self.uri_to_path(source_uri) else {
             return;
@@ -52,6 +53,7 @@ impl State {
 }
 
 impl State {
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     fn forward(&self) {
         use rayon::prelude::*;
 
@@ -61,25 +63,32 @@ impl State {
             for (doc_changes, transpile_changed) in changes {
                 let transpile_changed = *transpile_changed;
 
-                if let Some(t) = self.get_transpile(doc_uri) {
-                    let changes = self.forward_changes(&t, doc_changes, transpile_changed);
-                    let t_new = self.set_transpile(doc_uri).unwrap();
-                    let p = self.forward_params(changes, &t_new, transpile_changed);
-                    self.add_forwarded_changes(doc_uri, p, &self.uncommitted_transpile_changes);
-                }
+                let transpile_task = || {
+                    if let Some(t) = self.get_transpile(doc_uri) {
+                        let changes = self.forward_changes(&t, doc_changes, transpile_changed);
+                        let t_new = self.set_transpile(doc_uri).unwrap();
+                        let p = self.forward_params(changes, &t_new, transpile_changed);
+                        self.add_forwarded_changes(doc_uri, p, &self.uncommitted_transpile_changes);
+                    }
+                };
 
-                if let Some(b) = self.get_bundle(doc_uri) {
-                    let changes = self.forward_changes(&b, doc_changes, transpile_changed);
-                    let b_new = self.set_bundle(doc_uri).unwrap();
-                    let p = self.forward_params(changes, &b_new, transpile_changed);
-                    self.add_forwarded_changes(doc_uri, p, &self.uncommitted_bundle_changes);
-                }
+                let bundle_task = || {
+                    if let Some(b) = self.get_bundle(doc_uri) {
+                        let changes = self.forward_changes(&b, doc_changes, transpile_changed);
+                        let b_new = self.set_bundle(doc_uri).unwrap();
+                        let p = self.forward_params(changes, &b_new, transpile_changed);
+                        self.add_forwarded_changes(doc_uri, p, &self.uncommitted_bundle_changes);
+                    }
+                };
+
+                rayon::join(transpile_task, bundle_task);
             }
         });
 
         self.unforwarded_doc_changes.clear();
     }
 
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     fn forward_changes(
         &self,
         build: &Build,
@@ -111,6 +120,7 @@ impl State {
         build_changes
     }
 
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     fn forward_params(
         &self,
         fc: Vec<ChangeEvent>,
@@ -128,6 +138,7 @@ impl State {
         }
     }
 
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     fn add_forwarded_changes(
         &self,
         source_uri: &Uri,

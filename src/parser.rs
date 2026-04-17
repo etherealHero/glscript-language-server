@@ -13,6 +13,7 @@ pub struct Parse<'a> {
     pub str_interpolations: Vec<LineCol>,
 }
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn parse<'a>(raw_text: &'a str) -> Parse<'a> {
     let raw_text_ptr = raw_text.as_ptr() as usize;
     let pairs = get_pairs(raw_text);

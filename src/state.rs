@@ -19,7 +19,7 @@ type UnforwardedDocChanges = DashMap<PathBuf, Vec<(lsp::DidChangeTextDocumentPar
 pub type UnforwardedBuildChanges = DashMap<PathBuf, Vec<lsp::DidChangeTextDocumentParams>>;
 pub type BuildStorage = dashmap::DashMap<PathBuf, BuildWithVersion>;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct State {
     pub cancel_received: Arc<crossbeam::atomic::AtomicCell<bool>>,
 

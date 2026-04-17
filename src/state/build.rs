@@ -10,11 +10,13 @@ use crate::types::{BuildWithVersion, Source, SourcePattern};
 
 /// State of builds
 impl State {
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn set_bundle(&self, source_uri: &Uri) -> anyhow::Result<BuildWithVersion> {
         let opt = BuildOptionsBuilder::init(source_uri, self);
         self.build(opt, &self.doc_to_bundle)
     }
 
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn set_transpile(&self, source_uri: &Uri) -> anyhow::Result<BuildWithVersion> {
         let opt = BuildOptionsBuilder::init(source_uri, self).transpile_mode();
         self.build(opt, &self.doc_to_transpile)

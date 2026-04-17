@@ -13,6 +13,7 @@ impl Build {
             .collect()
     }
 
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn forward_src_position(
         &self,
         pos: &lsp::Position,
@@ -36,22 +37,24 @@ impl Build {
             }
         }
 
-        if let Some(t) = token {
+        token.map(|t| {
             let line = t.get_dst_line();
             let character = t.get_dst_col() + (pos.character - t.get_src_col());
-            Some(lsp::Position::new(line, character))
-        } else {
-            None
-        }
+            lsp::Position::new(line, character)
+        })
     }
 
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn forward_src_range(
         &self,
         range: &lsp::Range,
         range_source: &Source,
     ) -> Option<lsp::Range> {
-        let build_start_pos = self.forward_src_position(&range.start, range_source);
-        let build_end_pos = self.forward_src_position(&range.end, range_source);
+        let (build_start_pos, build_end_pos) = rayon::join(
+            || self.forward_src_position(&range.start, range_source),
+            || self.forward_src_position(&range.end, range_source),
+        );
+
         match (build_start_pos, build_end_pos) {
             (Some(start), Some(end)) => Some(lsp::Range::new(start, end)),
             _ => None,

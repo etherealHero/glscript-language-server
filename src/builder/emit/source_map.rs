@@ -7,7 +7,12 @@ use crate::types::{DocumentLinkStatement, Source};
 
 /// SourceMap
 impl Emit {
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn sourcemap(st: &mut Emit, ctx: &mut Context, target: &Uri) {
+        Emit::_sourcemap(st, ctx, target);
+    }
+
+    fn _sourcemap(st: &mut Emit, ctx: &mut Context, target: &Uri) {
         let Ok(d) = ctx.proxy_state.get_doc(target) else {
             return;
         };
@@ -36,7 +41,7 @@ impl Emit {
             if let Ok(source) = source {
                 let stack = (source, (0, 0).into(), 0);
                 ctx.stack.push(stack);
-                Emit::sourcemap(st, ctx, ctx.defult_document);
+                Emit::_sourcemap(st, ctx, ctx.defult_document);
                 ctx.stack.pop();
             }
 
@@ -97,7 +102,7 @@ impl Emit {
 
                     // 1*
                     if dep_doc.is_ok() {
-                        Emit::sourcemap(st, ctx, &dep_uri().unwrap());
+                        Emit::_sourcemap(st, ctx, &dep_uri().unwrap());
                         ctx.stack.pop();
                     }
 
@@ -129,6 +134,7 @@ impl Emit {
         }
     }
 
+    #[inline]
     pub fn line_break(&mut self) {
         match self {
             Emit::WithSourceMapBuilderAndDstLine(_, dst_line, _) => *dst_line += 1,

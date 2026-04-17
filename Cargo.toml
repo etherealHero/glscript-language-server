@@ -54,6 +54,8 @@ derive_more = { version = "2.1.0", features = [
 ] }
 convert_case = "^0.10"
 
+tracing-chrome = { version = "0.7.2", optional = true }
+
 [dev-dependencies]
 tokio = { version = "1.41.1", features = [
   "io-std",
@@ -74,6 +76,9 @@ lto = "thin"
 [profile.dev]
 opt-level = 3
 debug = true
+
+[features]
+profiling = ["dep:tracing-chrome"]
 
 # [[test]]
 # name = "parser"

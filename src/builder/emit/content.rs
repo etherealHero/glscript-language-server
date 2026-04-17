@@ -12,7 +12,12 @@ pub struct PatternMatched {
 
 /// Destination content
 impl Emit {
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn content(st: &mut Emit, ctx: &mut Context, target: &Uri) -> Option<PatternMatched> {
+        Emit::_content(st, ctx, target)
+    }
+
+    pub fn _content(st: &mut Emit, ctx: &mut Context, target: &Uri) -> Option<PatternMatched> {
         if target == ctx.defult_document {
             ctx.is_default_context = true;
         }
@@ -37,7 +42,7 @@ impl Emit {
         }
 
         if ctx.resolve_deps {
-            if let Some(dep_match) = Emit::content(st, ctx, ctx.defult_document) {
+            if let Some(dep_match) = Emit::_content(st, ctx, ctx.defult_document) {
                 let current_matched = matched.as_ref().unwrap();
                 matched = Some(PatternMatched {
                     literal: current_matched.literal.max(dep_match.literal),
@@ -71,7 +76,7 @@ impl Emit {
                     st.push_str(link.unwrap_or(&DocumentLinkStatement::undefined()));
 
                     if dep_doc.is_ok()
-                        && let Some(dep_match) = Emit::content(st, ctx, &dep_uri().unwrap())
+                        && let Some(dep_match) = Emit::_content(st, ctx, &dep_uri().unwrap())
                     {
                         let current_matched = matched.as_ref().unwrap();
                         matched = Some(PatternMatched {

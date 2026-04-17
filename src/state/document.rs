@@ -14,6 +14,7 @@ use crate::types::{DocumentIdentifier, Source, SourceHash};
 
 /// State of client buffers
 impl State {
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn set_doc(
         &self,
         source_uri: &Uri,

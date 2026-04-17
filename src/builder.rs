@@ -82,6 +82,7 @@ impl Build {
     }
 }
 
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> {
     let doc = opt.st.get_doc(opt.uri)?;
     let (mut initial_buf, sources_cap, tokens_cap) = {
@@ -110,15 +111,6 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
         Context::new(opt.st, default_doc, visited, p, s, i, false, vec![])
     };
 
-    {
-        let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
-        let dst_line = if opt.resolve_deps { 1 } else { 0 };
-        let swis = HashMap::with_capacity(sources_cap);
-        let mut emit_state = Emit::WithSourceMapBuilderAndDstLine(builder, dst_line, swis);
-        Emit::prepare_par_iter(&mut emit_state, &mut new_ctx(), opt.uri);
-        emit_state.finish(opt.st);
-    }
-
     let sourcemap_task = || {
         let builder = SourceMapBuilder::with_capacity(tokens_cap, sources_cap);
         let dst_line = if opt.resolve_deps { 1 } else { 0 };
@@ -133,6 +125,7 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
             _ => unreachable!(),
         }
     };
+
     let content_task = || {
         let pat_sources = opt.pat.as_ref().map(|_| HashSet::default());
         let mut emit_st = Emit::WithDstContent(initial_buf, pat_sources);
@@ -143,7 +136,19 @@ fn build(opt: &BuildOptions) -> anyhow::Result<(Build, Option<PatternSources>)> 
         }
     };
 
-    let (sourcemap_task, content_task) = rayon::join(sourcemap_task, content_task);
+    if opt.resolve_deps {
+        Emit::prepare_par_iter(&mut new_ctx(), opt.uri);
+    }
+
+    let (content_task, sourcemap_task) = {
+        if opt.resolve_deps {
+            rayon::join(content_task, sourcemap_task)
+        } else {
+            let (st, ct) = rayon::join(sourcemap_task, content_task);
+            (ct, st)
+        }
+    };
+
     let (tokens_count, source_map, sources_stack) = sourcemap_task;
     let (content, pattern_sources) = content_task;
 

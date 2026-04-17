@@ -11,6 +11,8 @@ use crate::proxy::language_server::init_language_server_router;
 use crate::state::State;
 use crate::types::Source;
 use forward_layer::{ForwardingLayer, TService};
+
+#[cfg(not(feature = "profiling"))]
 pub use tracing_formatter::Formatter;
 
 mod forward_layer;
@@ -50,7 +52,7 @@ impl Canonicalize for Uri {
     }
 }
 
-#[derive(Default, Clone, Constructor)]
+#[derive(Default, Clone, Constructor, Debug)]
 pub struct Proxy {
     client: std::sync::Arc<std::sync::OnceLock<ClientSocket>>,
     server: std::sync::Arc<std::sync::OnceLock<ServerSocket>>,
@@ -102,7 +104,6 @@ impl Error {
         ResponseError::new(ErrorCode::REQUEST_FAILED, err)
     }
 
-    #[tracing::instrument(skip_all)]
     pub fn forward_failed() -> ResponseError {
         ResponseError::new(ErrorCode::REQUEST_FAILED, "Forward failed")
     }

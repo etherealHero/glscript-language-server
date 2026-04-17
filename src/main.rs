@@ -16,11 +16,14 @@ use crate::proxy::Proxy;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(LevelFilter::INFO)
-        .with(tracing_subscriber::filter::filter_fn(|m| {
-            m.name() != "service_ready"
-        }))
+    let registry = tracing_subscriber::registry().with(LevelFilter::INFO);
+
+    #[cfg(feature = "profiling")]
+    let (chrome_layer, _guard) = tracing_chrome::ChromeLayerBuilder::new().build();
+    #[cfg(feature = "profiling")]
+    let registry = registry.with(chrome_layer);
+    #[cfg(not(feature = "profiling"))]
+    let registry = registry
         .with(
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
@@ -30,7 +33,11 @@ async fn main() {
                 .with_target(true)
                 .event_format(proxy::Formatter),
         )
-        .init();
+        .with(tracing_subscriber::filter::filter_fn(|m| {
+            m.name() != "service_ready"
+        }));
+
+    registry.init();
 
     let server = &std::env::args()
         .nth(1)
