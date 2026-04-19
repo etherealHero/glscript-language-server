@@ -15,6 +15,7 @@ impl State {
         token_types: Option<Vec<lsp::SemanticTokenType>>,
     ) {
         let path = self.uri_to_path(source_uri).unwrap();
+        let path = (*path).clone();
         let msg = "project initialize once";
         let ident = lsp::NumberOrString::String("glscript".into());
 

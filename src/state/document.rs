@@ -22,6 +22,7 @@ impl State {
     ) -> anyhow::Result<()> {
         type RefMut<'a> = dashmap::mapref::one::RefMut<'a, PathBuf, Document>;
         let path = self.uri_to_path(source_uri)?;
+        let path = (*path).clone();
         let mut doc = if let Some(old_doc) = self.documents.get_mut(&path) {
             old_doc
         } else {
@@ -95,7 +96,8 @@ impl State {
 
     /// will create uninitialized documents too
     pub fn get_doc(&self, source_uri: &Uri) -> anyhow::Result<Document> {
-        let path = &self.uri_to_path(source_uri)?;
+        let path = self.uri_to_path(source_uri)?;
+        let path = &(*path).clone();
         let doc = self.documents.get(path);
 
         if let Some(d) = doc {
@@ -117,7 +119,8 @@ impl State {
     }
 
     pub fn get_doc_source_hash(&self, source_uri: &Uri) -> anyhow::Result<SourceHash> {
-        let path = &self.uri_to_path(source_uri)?;
+        let path = self.uri_to_path(source_uri)?;
+        let path = &(*path).clone();
 
         match self.documents.get(path) {
             Some(d) => Ok(d.source_hash),

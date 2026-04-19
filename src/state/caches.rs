@@ -9,14 +9,15 @@ use crate::state::State;
 impl State {
     /// returns canonicalized [`PathBuf`]
     #[inline]
-    pub fn uri_to_path(&self, uri: &Uri) -> anyhow::Result<PathBuf> {
+    pub fn uri_to_path(&self, uri: &Uri) -> anyhow::Result<Arc<PathBuf>> {
         if let Some(canonicalized_path) = self.uri_to_canonicalized_path.get(uri) {
             return Ok(canonicalized_path.clone());
         }
 
         let path = uri.to_file_path();
         let path = path.map_err(|_| anyhow::anyhow!("uri to file path fail: {uri}"))?;
-        let canonicalized_path = dunce::canonicalize(dunce::simplified(&path))?;
+        let canonicalized_path: Arc<PathBuf> =
+            dunce::canonicalize(dunce::simplified(&path))?.into();
 
         self.uri_to_canonicalized_path
             .insert(uri.clone(), canonicalized_path.clone());

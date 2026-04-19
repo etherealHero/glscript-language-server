@@ -40,14 +40,16 @@ impl State {
     }
 
     pub fn remove_bundle(&self, source_uri: &Uri) {
-        let path = &self.uri_to_path(source_uri).unwrap();
+        let path = self.uri_to_path(source_uri).unwrap();
+        let path = &(*path).clone();
         self.doc_to_bundle.remove(path);
         self.uncommitted_bundle_changes.remove(path);
         self.unforwarded_doc_changes.remove(path);
     }
 
     pub fn remove_transpile(&self, source_uri: &Uri) {
-        let path = &self.uri_to_path(source_uri).unwrap();
+        let path = self.uri_to_path(source_uri).unwrap();
+        let path = &(*path).clone();
         self.doc_to_transpile.remove(path);
         self.uncommitted_transpile_changes.remove(path);
     }
@@ -79,7 +81,8 @@ impl State {
         let map = |s: &Source| {
             let path = self.get_project().join(s.as_str());
             let uri = self.path_to_uri(&path).unwrap();
-            self.uri_to_path(&uri).unwrap()
+            let path = self.uri_to_path(&uri).unwrap();
+            (*path).clone()
         };
         self.get_bundle(&default_doc)
             .unwrap_or_else(|| self.set_bundle(&default_doc).unwrap().build)
@@ -96,7 +99,8 @@ impl State {
         opt: BuildOptionsBuilder,
         s: &BuildStorage,
     ) -> anyhow::Result<BuildWithVersion> {
-        let path = &self.uri_to_path(opt.target())?;
+        let path = self.uri_to_path(opt.target())?;
+        let path = &(*path).clone();
         let Some(mut cur_build) = s.get_mut(path) else {
             let new_build = Build::create(opt)?;
             let build_with_version = BuildWithVersion::new(new_build.into(), 1);
@@ -114,6 +118,7 @@ impl State {
 
     fn get_build_from_storage(&self, source_uri: &Uri, s: &BuildStorage) -> Option<Arc<Build>> {
         let path = self.uri_to_path(source_uri).ok()?;
+        let path = (*path).clone();
         s.get(&path).map(|guard| guard.build.clone())
     }
 

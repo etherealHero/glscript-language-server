@@ -40,6 +40,6 @@ pub struct State {
     uncommitted_transpile_changes: UnforwardedBuildChanges,
 
     path_resolver_cache: DashMap<(PathBuf, String), Arc<PathBuf>>,
-    uri_to_canonicalized_path: DashMap<Uri, PathBuf>,
+    uri_to_canonicalized_path: DashMap<Uri, Arc<PathBuf>>,
     path_to_canonicalized_uri: DashMap<PathBuf, Arc<Uri>>,
 }

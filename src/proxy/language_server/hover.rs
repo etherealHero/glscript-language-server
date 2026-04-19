@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::Arc;
 
 use async_lsp::lsp_types::{Url as Uri, request as R};
 use async_lsp::{LanguageServer, lsp_types as lsp};
@@ -77,11 +78,11 @@ pub fn proxy_hover_with_decl_info(
                                 "".to_string()
                             };
 
-                            let path_to_md_link = |p: std::path::PathBuf| {
+                            let path_to_md_link = |p: Arc<std::path::PathBuf>| {
                                 Some(format!(
                                     "[{}]({}{def_pos})",
                                     p.file_stem().unwrap().to_str().unwrap(),
-                                    Uri::from_file_path(p.clone()).unwrap().as_str()
+                                    Uri::from_file_path((*p).clone()).unwrap().as_str()
                                 ))
                             };
 

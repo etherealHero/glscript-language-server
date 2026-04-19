@@ -34,6 +34,7 @@ impl State {
         let Ok(path) = self.uri_to_path(source_uri) else {
             return;
         };
+        let path = (*path).clone();
 
         let commit = |s: &mut ServerSocket, storage: &UnforwardedBuildChanges| {
             let Some(changes) = storage.remove(&path).map(|e| e.1) else {
@@ -142,6 +143,7 @@ impl State {
         storage: &UnforwardedBuildChanges,
     ) {
         let path = self.uri_to_path(source_uri).unwrap();
+        let path = (*path).clone();
         let modify = |c: &mut Vec<lsp::DidChangeTextDocumentParams>| {
             let one_change = forward_changes.content_changes.len() == 1;
             let change = forward_changes.content_changes.first();
