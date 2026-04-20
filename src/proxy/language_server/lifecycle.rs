@@ -61,8 +61,8 @@ pub fn initialized(this: &mut Proxy, params: lsp::InitializedParams) -> NotifyRe
     let _ = this.server().initialized(params);
 
     match self_update() {
-        Ok(status) => tracing::info!("self_update: {status}"),
-        Err(err) => tracing::error!("self_update: {err}"),
+        Ok(version) => tracing::info!("glscript-language-server v{version}"),
+        Err(err) => tracing::error!("self update: {err}"),
     }
 
     std::ops::ControlFlow::Continue(())
