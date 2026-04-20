@@ -5,7 +5,6 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  # Запускать публикацию релиза только при публикации нового релиза в GitHub
   release:
     types: [published]
 
@@ -13,31 +12,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Джоба 1: Проверка кода (запускается на каждый пуш и PR)
   check:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Check code
-      run: cargo check --verbose
+      run: cargo check
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test
 
-  # Джоба 2: Сборка релиза (запускается только при публикации релиза)
   release:
     if: github.event_name == 'release'
-    needs: check # Сначала проверяем код
-    runs-on: windows-latest # Собираем под Windows
+    needs: check
+    runs-on: windows-latest
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Build Release
-      run: cargo build --release --verbose
+      run: cargo build --release
+
+    - name: Zip Release Asset
+      run: Compress-Archive -Path target/release/glscript-language-server.exe -DestinationPath glscript-language-server-windows.zip
 
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v2
       with:
-        files: target/release/glscript-language-server.exe
+        files: glscript-language-server-windows.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
