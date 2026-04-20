@@ -82,6 +82,8 @@ pub fn exit(this: &mut Proxy, (): <N::Exit as N::Notification>::Params) -> Notif
 }
 
 /// check update after init tsserver success for exclude loop checking
+///
+/// current supported platforms: Windows
 fn self_update() -> Result<String, Box<dyn std::error::Error>> {
     #[cfg(feature = "default")]
     {
@@ -91,6 +93,7 @@ fn self_update() -> Result<String, Box<dyn std::error::Error>> {
             .repo_owner("etherealHero")
             .repo_name("glscript-language-server")
             .bin_name("glscript-language-server")
+            .identifier("glscript-language-server")
             .no_confirm(true)
             .show_output(false)
             .current_version(cargo_crate_version!())
