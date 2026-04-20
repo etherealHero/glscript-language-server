@@ -50,32 +50,39 @@ pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut
             .await
             .unwrap_or(Err(async_lsp::Error::Response(Error::internal("timeout"))));
 
-        match res.map_err(Error::internal) {
+        let res = match res.map_err(Error::internal) {
             Err(_) => std::process::exit(1),
             Ok(r) => Ok(r),
+        };
+
+        let need_restart = match self_update() {
+            Ok(su) => match su {
+                SelfUpdate::UpToDate(version) => {
+                    tracing::info!("using glscript-language-server v{version}");
+                    false
+                }
+                SelfUpdate::Updated(new_version) => {
+                    tracing::info!("updating to glscript-language-server v{new_version}...");
+                    true
+                }
+            },
+            Err(err) => {
+                tracing::error!("self update: {err}");
+                false
+            }
+        };
+
+        if need_restart {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            std::process::exit(1);
         }
+
+        res
     })
 }
 
 pub fn initialized(this: &mut Proxy, params: lsp::InitializedParams) -> NotifyResult {
     let _ = this.server().initialized(params);
-
-    match self_update() {
-        Ok(su) => match su {
-            SelfUpdate::UpToDate(version) => {
-                tracing::info!("using glscript-language-server v{version}")
-            }
-            SelfUpdate::Updated(new_version) => {
-                tracing::info!("updating to glscript-language-server v{new_version}...");
-                let _ = this.server().exit(());
-                std::process::exit(1);
-            }
-            #[cfg(not(feature = "default"))]
-            SelfUpdate::DevMode => tracing::info!("glscript-language-server dev version"),
-        },
-        Err(err) => tracing::error!("self update: {err}"),
-    }
-
     std::ops::ControlFlow::Continue(())
 }
 
@@ -122,13 +129,11 @@ fn self_update() -> Result<SelfUpdate, Box<dyn std::error::Error>> {
 
     #[cfg(not(feature = "default"))]
     {
-        Ok(SelfUpdate::DevMode)
+        Ok(SelfUpdate::UpToDate("DEV".to_string()))
     }
 }
 
 enum SelfUpdate {
     UpToDate(String),
     Updated(String),
-    #[cfg(not(feature = "default"))]
-    DevMode,
 }
