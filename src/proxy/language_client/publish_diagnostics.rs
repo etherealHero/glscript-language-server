@@ -23,7 +23,7 @@ pub fn proxy_publish_diagnostics(
     }
 
     let Some(doc_build) = state.get_any_build_by_emit_uri(&params.uri) else {
-        // tracing::info!("{}", Error::unbuild_fallback()); // TODO: skip immidiatly closed buffers
+        tracing::info!("{}", Error::unbuild_fallback()); // TODO: skip immidiatly closed buffers
         let _ = client.publish_diagnostics(params);
         return std::ops::ControlFlow::Continue(());
     };

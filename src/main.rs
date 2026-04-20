@@ -16,6 +16,14 @@ use crate::proxy::Proxy;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let current_exe = std::env::current_exe().unwrap();
+    if std::fs::exists(current_exe.with_added_extension("update")).unwrap() {
+        self_update::self_replace::self_replace(current_exe.with_added_extension("update"))
+            .unwrap();
+        std::fs::remove_file(current_exe.with_added_extension("update")).unwrap();
+        std::process::exit(1);
+    }
+
     let registry = tracing_subscriber::registry().with(LevelFilter::INFO);
 
     #[cfg(feature = "profiling")]

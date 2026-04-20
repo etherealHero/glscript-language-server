@@ -61,7 +61,18 @@ pub fn initialized(this: &mut Proxy, params: lsp::InitializedParams) -> NotifyRe
     let _ = this.server().initialized(params);
 
     match self_update() {
-        Ok(version) => tracing::info!("glscript-language-server v{version}"),
+        Ok(su) => match su {
+            SelfUpdate::UpToDate(version) => {
+                tracing::info!("using glscript-language-server v{version}")
+            }
+            SelfUpdate::Updated(new_version) => {
+                tracing::info!("updating to glscript-language-server v{new_version}...");
+                let _ = this.server().exit(());
+                std::process::exit(1);
+            }
+            #[cfg(not(feature = "default"))]
+            SelfUpdate::DevMode => tracing::info!("glscript-language-server dev version"),
+        },
         Err(err) => tracing::error!("self update: {err}"),
     }
 
@@ -84,7 +95,7 @@ pub fn exit(this: &mut Proxy, (): <N::Exit as N::Notification>::Params) -> Notif
 /// check update after init tsserver success for exclude loop checking
 ///
 /// current supported platforms: Windows
-fn self_update() -> Result<String, Box<dyn std::error::Error>> {
+fn self_update() -> Result<SelfUpdate, Box<dyn std::error::Error>> {
     #[cfg(feature = "default")]
     {
         use self_update::cargo_crate_version;
@@ -94,17 +105,30 @@ fn self_update() -> Result<String, Box<dyn std::error::Error>> {
             .repo_name("glscript-language-server")
             .bin_name("glscript-language-server")
             .identifier("glscript-language-server")
+            .bin_install_path(std::env::current_exe()?.with_added_extension("update"))
             .no_confirm(true)
             .show_output(false)
             .current_version(cargo_crate_version!())
             .build()?
             .update()?;
 
-        Ok(status.version().to_string())
+        let status = match status {
+            self_update::Status::UpToDate(v) => SelfUpdate::UpToDate(v),
+            self_update::Status::Updated(v) => SelfUpdate::Updated(v),
+        };
+
+        Ok(status)
     }
 
     #[cfg(not(feature = "default"))]
     {
-        Ok("dev".to_string())
+        Ok(SelfUpdate::DevMode)
     }
+}
+
+enum SelfUpdate {
+    UpToDate(String),
+    Updated(String),
+    #[cfg(not(feature = "default"))]
+    DevMode,
 }
