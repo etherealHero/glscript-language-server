@@ -60,8 +60,9 @@ pub fn initialize(this: &mut Proxy, mut params: lsp::InitializeParams) -> ResFut
 pub fn initialized(this: &mut Proxy, params: lsp::InitializedParams) -> NotifyResult {
     let _ = this.server().initialized(params);
 
-    if let Err(e) = self_update() {
-        tracing::error!("self_update: {e}");
+    match self_update() {
+        Ok(status) => tracing::info!("self_update: {status}"),
+        Err(err) => tracing::error!("self_update: {err}"),
     }
 
     std::ops::ControlFlow::Continue(())
@@ -81,25 +82,26 @@ pub fn exit(this: &mut Proxy, (): <N::Exit as N::Notification>::Params) -> Notif
 }
 
 /// check update after init tsserver success for exclude loop checking
-fn self_update() -> Result<(), Box<dyn std::error::Error>> {
+fn self_update() -> Result<String, Box<dyn std::error::Error>> {
     #[cfg(feature = "default")]
     {
         use self_update::cargo_crate_version;
 
-        self_update::backends::github::Update::configure()
+        let status = self_update::backends::github::Update::configure()
             .repo_owner("etherealHero")
             .repo_name("glscript-language-server")
             .bin_name("glscript-language-server")
             .no_confirm(true)
+            .show_output(false)
             .current_version(cargo_crate_version!())
             .build()?
             .update()?;
 
-        Ok(())
+        Ok(status.version().to_string())
     }
 
     #[cfg(not(feature = "default"))]
     {
-        Ok(())
+        Ok("dev".to_string())
     }
 }
