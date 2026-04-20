@@ -4,6 +4,7 @@
     "command": "cargo",
     "args": [
       "run",
+      "--no-default-features",
       "--",
       "./node_modules/.bin/typescript-language-server.cmd"
     ],
