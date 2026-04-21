@@ -59,7 +59,12 @@ tracing-chrome = { version = "0.7.2", optional = true }
 [dependencies.self_update]
 version = "0.44.0"
 optional = true
-features = ["archive-zip"]
+features = [
+  "archive-zip",
+  "compression-flate2",
+  "compression-zip-deflate",
+  "compression-zip-bzip2",
+]
 
 [dev-dependencies]
 tokio = { version = "1.41.1", features = [
