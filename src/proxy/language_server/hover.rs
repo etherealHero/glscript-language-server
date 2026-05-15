@@ -184,7 +184,8 @@ fn forward_md_links(mut hover: lsp::Hover, st: &State) -> anyhow::Result<lsp::Ho
         H::Markup(m) => vec![&mut m.value],
     };
 
-    let re = regex::Regex::new(r"(file:///.+?\..+?\.js)#L(\d+)(%2C|,)(\d+)").unwrap();
+    let re = r"(file:\/\/\/[^\s\]\)]+?\.[^\s\]\)]+?\.js)#L(\d+)(%2C|,)(\d+)";
+    let re = regex::Regex::new(re).unwrap();
     let project = st.get_project();
 
     for s in strings {
