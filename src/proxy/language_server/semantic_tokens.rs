@@ -119,7 +119,7 @@ fn enrich_tokens(
     });
 
     this.append(&mut non_intersect_other.collect::<Vec<_>>());
-    this.sort_by(|a, b| a.range.0.cmp(&b.range.0));
+    this.sort_by_key(|a| a.range.0);
     this
 }
 
