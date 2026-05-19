@@ -45,7 +45,11 @@ pub fn proxy_workspace_references(
     let definition_request = this.definition(definition_params(uri.clone(), pos.to_owned()));
 
     Box::pin(async move {
-        let def_loc = get_definition_location(definition_request).await?;
+        let def_loc = match definition_request.await? {
+            Some(DefRes::Link(links)) if !links.is_empty() => links.first().unwrap().clone(),
+            _ => return Ok(None),
+        };
+
         if def_loc.target_uri.as_str().ends_with(DECL_FILE_EXT) {
             let doc_pos = &mut p.text_document_position;
             try_forward_text_document_position_params!(st, req_bundle, doc_pos);
@@ -229,24 +233,6 @@ fn get_definition_pattern(def_loc: &lsp::LocationLink, state: &Arc<State>) -> (S
     let end_pos = def_doc.buffer.line_to_char(e.line as usize) + e.character as usize;
     let lit = def_doc.buffer.slice(start_pos..end_pos).to_string();
     (lit, def_doc.source_hash)
-}
-
-async fn get_definition_location(
-    definition_request: ResFut<R::GotoDefinition>,
-) -> Result<lsp::LocationLink, ResponseError> {
-    let definition_response = definition_request.await;
-    let message = "Definition of references request not found ".to_owned();
-    match definition_response {
-        Ok(Some(ref definition)) => match definition {
-            DefRes::Link(links) => match links.first() {
-                Some(def_loc) => Ok(def_loc.to_owned()),
-                None => Err(Error::request_failed(message + "([])")),
-            },
-            _ => unreachable!(),
-        },
-        Ok(None) => Err(Error::request_failed(message + "(None)")),
-        Err(err) => Err(err),
-    }
 }
 
 async fn fetch_with_build_params(
