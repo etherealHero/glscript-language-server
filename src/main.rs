@@ -14,6 +14,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::proxy::Proxy;
 
+static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
+    std::sync::OnceLock::new();
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let current_exe = std::env::current_exe().unwrap();
@@ -24,6 +27,15 @@ async fn main() {
         std::process::exit(1);
     }
 
+    let log_file = if std::env::args().any(|a| a.trim().eq("--log-file")) {
+        let file_appender = tracing_appender::rolling::never(".", "gls-lsp.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        LOG_GUARD.set(guard).ok();
+        Some(non_blocking)
+    } else {
+        None
+    };
+
     let registry = tracing_subscriber::registry().with(LevelFilter::INFO);
 
     #[cfg(feature = "profiling")]
@@ -31,21 +43,24 @@ async fn main() {
     #[cfg(feature = "profiling")]
     let registry = registry.with(chrome_layer);
     #[cfg(not(feature = "profiling"))]
-    let registry = registry
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(std::io::stderr)
-                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
-                .with_line_number(false)
-                .with_target(true)
-                .event_format(proxy::Formatter),
-        )
-        .with(tracing_subscriber::filter::filter_fn(|m| {
-            m.name() != "service_ready"
-        }));
+    let registry = registry.with(tracing_subscriber::filter::filter_fn(|m| {
+        m.name() != "service_ready"
+    }));
 
-    registry.init();
+    let layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .with_line_number(false)
+        .with_target(true)
+        .event_format(proxy::Formatter);
+
+    if let Some(log_file) = log_file {
+        let registry = registry.with(layer.with_writer(log_file));
+        registry.init();
+    } else {
+        let registry = registry.with(layer.with_writer(std::io::stderr));
+        registry.init();
+    };
 
     let server = &std::env::args()
         .nth(1)
