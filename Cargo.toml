@@ -41,6 +41,7 @@ convert_case = "^0.10"
 
 tracing-chrome = { version = "0.7.2", optional = true }
 tracing-appender = "0.2.5"
+nucleo-matcher = "0.3.1"
 
 [dependencies.derive_more]
 version = "2.1.0"

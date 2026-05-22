@@ -96,6 +96,11 @@ pub fn proxy_workspace_symbol(
     this: &mut Proxy,
     params: lsp::WorkspaceSymbolParams,
 ) -> ResFut<R::WorkspaceSymbolRequest> {
+    let query = params.query.trim().to_string();
+    if query.is_empty() {
+        return Box::pin(async move { Ok(None) });
+    }
+
     let mut s = this.server();
     let state = this.state.clone();
     let uri = match state.get_current_doc() {
@@ -115,71 +120,77 @@ pub fn proxy_workspace_symbol(
             .await
             .map_err(Error::internal);
 
+        let forward = |build_symbols: Vec<lsp::DocumentSymbol>| {
+            let mut buf = vec![];
+            let matcher = &mut nucleo_matcher::Matcher::default();
+            let pattern = nucleo_matcher::pattern::Pattern::parse(
+                &query,
+                nucleo_matcher::pattern::CaseMatching::Smart,
+                nucleo_matcher::pattern::Normalization::Smart,
+            );
+
+            let mut source_symbols = Vec::with_capacity(build_symbols.len());
+
+            for s in build_symbols {
+                if s.name.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
+                    continue;
+                }
+
+                let mut range = s.range;
+                let Ok(source) = forward_build_range(&mut range, &bundle) else {
+                    continue;
+                };
+
+                let uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                let uri = (*uri).clone();
+                let location = lsp::Location::new(uri, range);
+                let haystack = nucleo_matcher::Utf32Str::new(&s.name, &mut buf);
+                let Some(score) = pattern.score(haystack, matcher) else {
+                    continue;
+                };
+
+                source_symbols.push((
+                    match s.name.starts_with(&query) {
+                        true => score + 1000,
+                        false => score,
+                    },
+                    lsp::SymbolInformation {
+                        container_name: None,
+                        #[allow(deprecated)]
+                        deprecated: None,
+                        name: s.name,
+                        kind: s.kind,
+                        tags: s.tags,
+                        location,
+                    },
+                ));
+            }
+
+            source_symbols.sort_unstable_by_key(|b| std::cmp::Reverse(b.0));
+            source_symbols.truncate(100);
+            let source_symbols = source_symbols.into_iter().map(|(_, s)| s).collect();
+
+            Ok(Some(lsp::WorkspaceSymbolResponse::Flat(source_symbols)))
+        };
+
         match res {
-            Ok(Some(lsp::DocumentSymbolResponse::Nested(build_symbols))) => {
-                let mut source_symbols = Vec::with_capacity(build_symbols.len());
-
-                for s in build_symbols {
-                    if s.name.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
-                        continue;
-                    }
-
-                    let mut range = s.range;
-                    let Ok(source) = forward_build_range(&mut range, &bundle) else {
-                        continue;
-                    };
-
-                    let uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
-                    let uri = (*uri).clone();
-                    let location = lsp::Location::new(uri, range);
-
-                    source_symbols.push(lsp::SymbolInformation {
-                        container_name: None,
-                        #[allow(deprecated)]
-                        deprecated: None,
+            Ok(Some(lsp::DocumentSymbolResponse::Nested(build_symbols))) => forward(build_symbols),
+            Ok(Some(lsp::DocumentSymbolResponse::Flat(build_symbols))) => forward(
+                build_symbols
+                    .into_iter()
+                    .map(|s| lsp::DocumentSymbol {
                         name: s.name,
                         kind: s.kind,
                         tags: s.tags,
-                        location,
-                    });
-                }
-
-                source_symbols.truncate(100);
-
-                Ok(Some(lsp::WorkspaceSymbolResponse::Flat(source_symbols)))
-            }
-            Ok(Some(lsp::DocumentSymbolResponse::Flat(build_symbols))) => {
-                let mut source_symbols = Vec::with_capacity(build_symbols.len());
-
-                for s in build_symbols {
-                    if s.name.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
-                        continue;
-                    }
-
-                    let mut range = s.location.range;
-                    let Ok(source) = forward_build_range(&mut range, &bundle) else {
-                        continue;
-                    };
-
-                    let uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
-                    let uri = (*uri).clone();
-                    let location = lsp::Location::new(uri, range);
-
-                    source_symbols.push(lsp::SymbolInformation {
-                        container_name: None,
+                        range: s.location.range,
+                        selection_range: s.location.range,
                         #[allow(deprecated)]
-                        deprecated: None,
-                        name: s.name,
-                        kind: s.kind,
-                        tags: s.tags,
-                        location,
-                    });
-                }
-
-                source_symbols.truncate(100);
-
-                Ok(Some(lsp::WorkspaceSymbolResponse::Flat(source_symbols)))
-            }
+                        deprecated: s.deprecated,
+                        children: None,
+                        detail: None,
+                    })
+                    .collect::<Vec<_>>(),
+            ),
             Ok(None) => Ok(None),
             Err(err) => Err(err),
         }
