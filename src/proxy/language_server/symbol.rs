@@ -14,27 +14,49 @@ pub fn proxy_document_symbol(
     let mut s = this.server();
     let uri = &params.text_document.uri;
     let transpile = try_ensure_transpile!(this, uri, params, document_symbol);
+    let state = this.state.clone();
+    let project = state.get_project().clone();
 
     params.text_document.uri = transpile.uri.clone();
 
     Box::pin(async move {
         match s.document_symbol(params).await.map_err(Error::internal) {
             Ok(Some(lsp::DocumentSymbolResponse::Nested(symbols))) => {
-                let source_symbols = forward_document_symbol(&Some(symbols), &transpile);
-                let source_symbols = source_symbols.unwrap_or_default();
+                let source_symbols = forward_nested_document_symbol(&Some(symbols), &transpile);
+                let mut source_symbols = source_symbols.unwrap_or_default();
+                source_symbols.sort_unstable_by_key(|s| s.range.start);
                 Ok(Some(lsp::DocumentSymbolResponse::Nested(source_symbols)))
             }
-            Ok(Some(lsp::DocumentSymbolResponse::Flat(s))) => match s.is_empty() {
-                true => Ok(Some(lsp::DocumentSymbolResponse::Flat(s))),
-                false => Err(Error::forward_failed()),
-            },
+            Ok(Some(lsp::DocumentSymbolResponse::Flat(build_symbols))) => {
+                match build_symbols.is_empty() {
+                    true => Ok(Some(lsp::DocumentSymbolResponse::Flat(build_symbols))),
+                    false => Ok(Some({
+                        let mut source_symbols = Vec::with_capacity(build_symbols.len());
+                        for s in build_symbols {
+                            if s.name.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
+                                continue;
+                            }
+                            let mut range = s.location.range;
+                            let Ok(source) = forward_build_range(&mut range, &transpile) else {
+                                continue;
+                            };
+                            let uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                            let uri = (*uri).clone();
+                            let location = lsp::Location::new(uri, range);
+                            source_symbols.push(lsp::SymbolInformation { location, ..s });
+                        }
+                        source_symbols.sort_unstable_by_key(|s| s.location.range.start);
+                        lsp::DocumentSymbolResponse::Flat(source_symbols)
+                    })),
+                }
+            }
             Ok(None) => Ok(None),
             Err(err) => Err(err),
         }
     })
 }
 
-fn forward_document_symbol(
+fn forward_nested_document_symbol(
     build_symbols: &Option<Vec<lsp::DocumentSymbol>>,
     build: &Build,
 ) -> Option<Vec<lsp::DocumentSymbol>> {
@@ -56,7 +78,7 @@ fn forward_document_symbol(
         forward_build_range(&mut selection_range, build).ok()?;
 
         source_symbols.push(lsp::DocumentSymbol {
-            children: forward_document_symbol(&s.children, build),
+            children: forward_nested_document_symbol(&s.children, build),
             detail: s.detail.to_owned(),
             name: s.name.to_owned(),
             tags: s.tags.to_owned(),
