@@ -116,10 +116,10 @@ pub fn proxy_workspace_symbol(
             .map_err(Error::internal);
 
         match res {
-            Ok(Some(lsp::DocumentSymbolResponse::Nested(symbols))) => {
-                let mut source_symbols = Vec::with_capacity(symbols.len());
+            Ok(Some(lsp::DocumentSymbolResponse::Nested(build_symbols))) => {
+                let mut source_symbols = Vec::with_capacity(build_symbols.len());
 
-                for s in symbols {
+                for s in build_symbols {
                     if s.name.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
                         continue;
                     }
@@ -144,12 +144,42 @@ pub fn proxy_workspace_symbol(
                     });
                 }
 
+                source_symbols.truncate(100);
+
                 Ok(Some(lsp::WorkspaceSymbolResponse::Flat(source_symbols)))
             }
-            Ok(Some(lsp::DocumentSymbolResponse::Flat(s))) => match s.is_empty() {
-                true => Ok(Some(lsp::WorkspaceSymbolResponse::Flat(vec![]))),
-                false => Err(Error::forward_failed()),
-            },
+            Ok(Some(lsp::DocumentSymbolResponse::Flat(build_symbols))) => {
+                let mut source_symbols = Vec::with_capacity(build_symbols.len());
+
+                for s in build_symbols {
+                    if s.name.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
+                        continue;
+                    }
+
+                    let mut range = s.location.range;
+                    let Ok(source) = forward_build_range(&mut range, &bundle) else {
+                        continue;
+                    };
+
+                    let uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                    let uri = (*uri).clone();
+                    let location = lsp::Location::new(uri, range);
+
+                    source_symbols.push(lsp::SymbolInformation {
+                        container_name: None,
+                        #[allow(deprecated)]
+                        deprecated: None,
+                        name: s.name,
+                        kind: s.kind,
+                        tags: s.tags,
+                        location,
+                    });
+                }
+
+                source_symbols.truncate(100);
+
+                Ok(Some(lsp::WorkspaceSymbolResponse::Flat(source_symbols)))
+            }
             Ok(None) => Ok(None),
             Err(err) => Err(err),
         }

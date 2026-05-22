@@ -41,6 +41,11 @@ pub fn proxy_did_open(this: &mut Proxy, params: lsp::DidOpenTextDocumentParams) 
 
         let _ = did_open(s, &b.build.uri, &b.build.content, b.version.into());
         let _ = did_open(s, &t.build.uri, &t.build.content, t.version.into());
+
+        // fallback if code_lens not supported by client
+        if this.state.get_current_doc() != Some(uri.try_canonicalize()) {
+            this.state.set_current_doc(uri);
+        }
     } else {
         let _ = s.did_open(params);
     }
@@ -79,6 +84,12 @@ pub fn proxy_did_change(
 
     // 3. commit req doc
     st.commit_changes(uri, &mut service);
+
+    // fallback if code_lens not supported by client
+    if st.get_current_doc() != Some(uri.try_canonicalize()) {
+        st.set_current_doc(uri);
+    }
+
     std::ops::ControlFlow::Continue(())
 }
 
@@ -145,7 +156,6 @@ pub fn proxy_sync_doc_by_code_lens_request(
     let state = this.state.clone();
     if state.get_current_doc() != Some(uri.try_canonicalize()) {
         state.set_current_doc(uri);
-
         if let Some(bundle) = state.get_bundle(uri) {
             bundle.save_on_disk(&state)
         }
