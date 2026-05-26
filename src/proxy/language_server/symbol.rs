@@ -27,29 +27,59 @@ pub fn proxy_document_symbol(
                 source_symbols.sort_unstable_by_key(|s| s.range.start);
                 Ok(Some(lsp::DocumentSymbolResponse::Nested(source_symbols)))
             }
-            Ok(Some(lsp::DocumentSymbolResponse::Flat(build_symbols))) => {
-                match build_symbols.is_empty() {
-                    true => Ok(Some(lsp::DocumentSymbolResponse::Flat(build_symbols))),
-                    false => Ok(Some({
-                        let mut source_symbols = Vec::with_capacity(build_symbols.len());
-                        for s in build_symbols {
-                            if s.name.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
+            Ok(Some(lsp::DocumentSymbolResponse::Flat(build_symbols))) => Ok(Some({
+                use rayon::prelude::*;
+
+                let mut source_symbols = Vec::with_capacity(build_symbols.len());
+                for s in build_symbols {
+                    if s.name.starts_with(SCRIPT_IDENTIFIER_PREFIX) {
+                        continue;
+                    }
+                    let mut range = s.location.range;
+                    let Ok(source) = forward_build_range(&mut range, &transpile) else {
+                        continue;
+                    };
+                    let uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
+                    let uri = (*uri).clone();
+                    let location = lsp::Location::new(uri, range);
+                    source_symbols.push(lsp::SymbolInformation { location, ..s });
+                }
+
+                source_symbols = source_symbols
+                    .par_iter()
+                    .enumerate()
+                    .filter(|(idx, candidate)| {
+                        let r = candidate.location.range;
+                        let mut is_nested = false;
+                        let mut has_children = false;
+                        for (other_idx, other) in source_symbols.iter().enumerate() {
+                            if *idx == other_idx {
                                 continue;
                             }
-                            let mut range = s.location.range;
-                            let Ok(source) = forward_build_range(&mut range, &transpile) else {
-                                continue;
-                            };
-                            let uri = state.path_to_uri(&project.join(source.as_str())).unwrap();
-                            let uri = (*uri).clone();
-                            let location = lsp::Location::new(uri, range);
-                            source_symbols.push(lsp::SymbolInformation { location, ..s });
+
+                            let other_r = other.location.range;
+                            if other_r.start <= r.start && other_r.end >= r.end {
+                                is_nested = true;
+                            }
+
+                            if r.start <= other_r.start && r.end >= other_r.end {
+                                has_children = true;
+                            }
+
+                            if is_nested && has_children {
+                                break;
+                            }
                         }
-                        source_symbols.sort_unstable_by_key(|s| s.location.range.start);
-                        lsp::DocumentSymbolResponse::Flat(source_symbols)
-                    })),
-                }
-            }
+                        let lines = r.end.line.saturating_sub(r.start.line);
+                        let looks_meaningful = lines > 1;
+                        !is_nested || has_children || looks_meaningful
+                    })
+                    .map(|(_, s)| s.clone())
+                    .collect();
+
+                source_symbols.sort_unstable_by_key(|s| s.location.range.start);
+                lsp::DocumentSymbolResponse::Flat(source_symbols)
+            })),
             Ok(None) => Ok(None),
             Err(err) => Err(err),
         }
