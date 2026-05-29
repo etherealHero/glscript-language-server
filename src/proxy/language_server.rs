@@ -136,7 +136,14 @@ impl LanguageServer for Proxy {
                 let is_bundle = |l: &lsp::Location| state.get_bundle_by_emit_uri(&l.uri).is_some();
                 let is_emit_file = |l: &lsp::Location| l.uri.as_str().ends_with(EMIT_FILE_EXT);
                 let is_source = |l: &lsp::Location| !is_bundle(l) && !is_emit_file(l);
-                res.map(|locations| locations.into_iter().filter(is_source).collect())
+                res.map(|locations| {
+                    let mut locations: Vec<_> = locations.into_iter().filter(is_source).collect();
+                    locations.sort_by(|a, b| {
+                        let first_ord = a.uri.as_str().cmp(b.uri.as_str());
+                        first_ord.then(a.range.start.cmp(&b.range.start))
+                    });
+                    locations
+                })
             });
             state.destroy_progress(&mut client);
             res
